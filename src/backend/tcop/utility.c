@@ -67,6 +67,8 @@
 #include "utils/acl.h"
 #include "utils/guc.h"
 #include "utils/syscache.h"
+#include "utils/fmgrprotos.h"
+#include "utils/builtins.h"
 
 
 /* Hook for plugins to get control in ProcessUtility() */
@@ -630,7 +632,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 
 				PreventCommandDuringRecovery("LISTEN");
 				CheckRestrictedOperation("LISTEN");
-				Async_Listen(stmt->conditionname);
+				Async_Listen(stmt->pattern, stmt->isSimilarToPattern);
 			}
 			break;
 
@@ -640,8 +642,8 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 
 				PreventCommandDuringRecovery("UNLISTEN");
 				CheckRestrictedOperation("UNLISTEN");
-				if (stmt->conditionname)
-					Async_Unlisten(stmt->conditionname);
+				if (stmt->pattern)
+					Async_Unlisten(stmt->pattern);
 				else
 					Async_UnlistenAll();
 			}
