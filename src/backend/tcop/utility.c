@@ -67,8 +67,6 @@
 #include "utils/acl.h"
 #include "utils/guc.h"
 #include "utils/syscache.h"
-#include "utils/fmgrprotos.h"
-#include "utils/builtins.h"
 
 
 /* Hook for plugins to get control in ProcessUtility() */
