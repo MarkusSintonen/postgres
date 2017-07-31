@@ -2355,6 +2355,7 @@ ClearPendingActionsAndNotifies(void)
 		if (!actrec->actionApplied && actrec->compiledRegex != NULL)
 		{
 			pg_regfree(actrec->compiledRegex);
+			pfree(actrec->compiledRegex);
 		}
 	}
 

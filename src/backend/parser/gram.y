@@ -9474,10 +9474,13 @@ UnlistenStmt:
 			| UNLISTEN Sconst
 				{
 					UnlistenStmt *n = makeNode(UnlistenStmt);
-					if (strcmp($2, "*") != 0)
-						n->pattern = $2;
-					else
-						n->pattern = NULL;
+					n->pattern = $2;
+					$$ = (Node *)n;
+				}
+			| UNLISTEN '*'
+				{
+					UnlistenStmt *n = makeNode(UnlistenStmt);
+					n->pattern = NULL;
 					$$ = (Node *)n;
 				}
 		;
