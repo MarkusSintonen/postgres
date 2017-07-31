@@ -617,25 +617,25 @@ Async_Notify(const char *channel, const char *payload)
 static int
 compile_regex(const char *pattern, regex_t *compiled_regex)
 {
-	pg_wchar	*wchar_pattern;
-	int			regcomp_result;
-	int			wchar_pattern_len;
-	int			pattern_len = strlen(pattern);
+	pg_wchar	*wcharpattern;
+	int			resregcomp;
+	int			lenwchar;
+	int			lenpattern = strlen(pattern);
 
-	wchar_pattern = (pg_wchar *)palloc((pattern_len + 1) * sizeof(pg_wchar));
-	wchar_pattern_len = pg_mb2wchar_with_len(pattern,
-											 wchar_pattern,
-											 pattern_len);
+	wcharpattern = (pg_wchar *)palloc((lenpattern + 1) * sizeof(pg_wchar));
+	lenwchar = pg_mb2wchar_with_len(pattern,
+									wcharpattern,
+									lenpattern);
 
-	regcomp_result = pg_regcomp(compiled_regex,
-								wchar_pattern,
-								wchar_pattern_len,
-								REG_ADVANCED,
-								DEFAULT_COLLATION_OID);
+	resregcomp = pg_regcomp(compiled_regex,
+							wcharpattern,
+							lenwchar,
+							REG_ADVANCED,
+							DEFAULT_COLLATION_OID);
 
-	pfree(wchar_pattern);
+	pfree(wcharpattern);
 
-	return regcomp_result;
+	return resregcomp;
 }
 
 /*
@@ -651,10 +651,11 @@ queue_listen(ListenActionKind action, const char *pattern, bool isSimilarToPatte
 {
 	MemoryContext oldcontext;
 	ListenAction *actrec;
-	regex_t		 compiled_regex;
-	regex_t		 *mc_compiled_regex;
-	int			 regcomp_result;
-	char		 errMsg[100];
+	regex_t		 compreg;
+	regex_t		 *pcompreg;
+	int			 resregcomp;
+	char		 errormsg[100];
+	Datum		 datum;
 
 	/*
 	 * Unlike Async_Notify, we don't try to collapse out duplicates. It would
@@ -667,32 +668,32 @@ queue_listen(ListenActionKind action, const char *pattern, bool isSimilarToPatte
 	if (isSimilarToPattern)
 	{
 		/* convert to regex pattern */
-		Datum datum = DirectFunctionCall1(similar_escape, CStringGetTextDatum(pattern));
+		datum = DirectFunctionCall1(similar_escape, CStringGetTextDatum(pattern));
 
 		/*
 		* Regex pattern is now compiled to ensure any errors are captured at this point.
 		* Compiled regex is copied to top memory context when we reach transaction commit.
 		* If compiled RE was not applied as a listener then it is freed at transaction commit.
 		*/
-		regcomp_result = compile_regex(TextDatumGetCString(datum), &compiled_regex);
+		resregcomp = compile_regex(TextDatumGetCString(datum), &compreg);
 
-		if (regcomp_result != REG_OKAY)
+		if (resregcomp != REG_OKAY)
 		{
 			MemoryContextSwitchTo(oldcontext);
 
 			CHECK_FOR_INTERRUPTS();
-			pg_regerror(regcomp_result, &compiled_regex, errMsg, sizeof(errMsg));
+			pg_regerror(resregcomp, &compreg, errormsg, sizeof(errormsg));
 			ereport(ERROR,
 				(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
-					errmsg("invalid regular expression: %s", errMsg)));
+					errmsg("invalid regular expression: %s", errormsg)));
 		}
 
-		mc_compiled_regex = palloc(sizeof(regex_t));
-		memcpy(mc_compiled_regex, &compiled_regex, sizeof(regex_t));
+		pcompreg = palloc(sizeof(regex_t));
+		memcpy(pcompreg, &compreg, sizeof(regex_t));
 	}
 	else
 	{
-		mc_compiled_regex = NULL;
+		pcompreg = NULL;
 	}
 
 	/* space for terminating null is included in sizeof(ListenAction) */
@@ -700,7 +701,7 @@ queue_listen(ListenActionKind action, const char *pattern, bool isSimilarToPatte
 									 strlen(pattern) + 1);
 	actrec->action = action;
 	actrec->actionApplied = false;
-	actrec->compiledRegex = mc_compiled_regex;
+	actrec->compiledRegex = pcompreg;
 	strcpy(actrec->userPattern, pattern);
 
 	pendingActions = lappend(pendingActions, actrec);
@@ -1088,7 +1089,7 @@ Exec_ListenCommit(const char *pattern, regex_t *compiledRegex)
 	ListCell	  *p;
 	MemoryContext oldcontext;
 	ListenChannel *lchan;
-	regex_t		  *copiedRegex;
+	regex_t		  *copiedcompreg;
 
 	/* Do nothing if we are already using this pattern for listening */
 
@@ -1115,17 +1116,17 @@ Exec_ListenCommit(const char *pattern, regex_t *compiledRegex)
 	{
 		/* copy the compiled RE to top memory context */
 
-		copiedRegex = (regex_t *)palloc(sizeof(regex_t));
-		memcpy(copiedRegex, compiledRegex, sizeof(regex_t));
+		copiedcompreg = (regex_t *)palloc(sizeof(regex_t));
+		memcpy(copiedcompreg, compiledRegex, sizeof(regex_t));
 	}
 	else
 	{
-		copiedRegex = NULL;
+		copiedcompreg = NULL;
 	}
 
 	lchan = (ListenChannel *)palloc(offsetof(ListenChannel, userPattern) + 
 									strlen(pattern) + 1);
-	lchan->compiledRegex = copiedRegex;
+	lchan->compiledRegex = copiedcompreg;
 	strcpy(lchan->userPattern, pattern);
 
 	listenChannels = lappend(listenChannels, lchan);
@@ -1310,13 +1311,13 @@ static bool
 IsListeningOn(const char *channel)
 {
 	ListCell	*p;
-	pg_wchar	*wchar_channel;
-	int			wchar_channel_len;
-	int			regexec_result;
-	char		errMsg[100];
+	pg_wchar	*wcharchannel;
+	int			lenwchar;
+	int			resregexec;
+	char		errormsg[100];
 	bool		matches;
 
-	wchar_channel = NULL;
+	wcharchannel = NULL;
 	matches = false;
 
 	foreach(p, listenChannels)
@@ -1333,29 +1334,29 @@ IsListeningOn(const char *channel)
 		}
 		else
 		{
-			if (wchar_channel == NULL)
+			if (wcharchannel == NULL)
 			{
 				/* Convert channel string to wide characters */
-				wchar_channel = (pg_wchar *)palloc((strlen(channel) + 1) * sizeof(pg_wchar));
-				wchar_channel_len = pg_mb2wchar_with_len(channel, wchar_channel, strlen(channel));
+				wcharchannel = (pg_wchar *)palloc((strlen(channel) + 1) * sizeof(pg_wchar));
+				lenwchar = pg_mb2wchar_with_len(channel, wcharchannel, strlen(channel));
 			}
 
 			/* Check RE match */
-			regexec_result = pg_regexec(lchan->compiledRegex, wchar_channel, wchar_channel_len, 0, NULL, 0, NULL, 0);
+			resregexec = pg_regexec(lchan->compiledRegex, wcharchannel, lenwchar, 0, NULL, 0, NULL, 0);
 
-			if (regexec_result != REG_OKAY && regexec_result != REG_NOMATCH)
+			if (resregexec != REG_OKAY && resregexec != REG_NOMATCH)
 			{
-				pfree(wchar_channel);
-				wchar_channel = NULL;
+				pfree(wcharchannel);
+				wcharchannel = NULL;
 
 				CHECK_FOR_INTERRUPTS();
-				pg_regerror(regexec_result, lchan->compiledRegex, errMsg, sizeof(errMsg));
+				pg_regerror(resregexec, lchan->compiledRegex, errormsg, sizeof(errormsg));
 				ereport(ERROR,
 					(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
-						errmsg("regular expression failed: %s", errMsg)));
+						errmsg("regular expression failed: %s", errormsg)));
 			}
 
-			if (regexec_result == REG_OKAY)
+			if (resregexec == REG_OKAY)
 			{
 				matches = true;
 				break;
@@ -1363,9 +1364,9 @@ IsListeningOn(const char *channel)
 		}
 	}
 
-	if (wchar_channel != NULL)
+	if (wcharchannel != NULL)
 	{
-		pfree(wchar_channel);
+		pfree(wcharchannel);
 	}
 
 	return matches;
