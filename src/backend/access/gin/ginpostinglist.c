@@ -98,6 +98,20 @@ uint64_to_itemptr(uint64 val, ItemPointer iptr)
 	Assert(ItemPointerIsValid(iptr));
 }
 
+static inline void
+uint64_to_ginptr(uint64 val, GinPointer gptr)
+{
+	ItemPointerData iptr;
+
+	GinItemPointerSetOffsetNumber(&iptr, val & ((1 << MaxHeapTuplesPerPageBits) - 1));
+	val = val >> MaxHeapTuplesPerPageBits;
+	GinItemPointerSetBlockNumber(&iptr, val);
+
+	ItemPointerToGinPointer(&iptr, gptr);
+
+	Assert(GinPointerIsValid(gptr));
+}
+
 /*
  * Varbyte-encode 'val' into *ptr. *ptr is incremented to next integer.
  */
@@ -274,29 +288,41 @@ ginPostingListDecode(GinPostingList *plist, int *ndecoded)
 }
 
 /*
- * Decode multiple posting list segments into an array of item pointers.
- * The number of items is returned in *ndecoded_out. The segments are stored
- * one after each other, with total size 'len' bytes.
- */
+* Decode a compressed posting list into an array of gin pointers.
+* The number of items is returned in *ndecoded.
+*/
+GinPointer
+ginPostingListDecodeToGinPointers(GinPostingList *plist, int *ndecoded)
+{
+	return ginPostingListDecodeAllSegmentsToGinPointers(plist,
+		SizeOfGinPostingList(plist),
+		ndecoded);
+}
+
+/*
+* Decode multiple posting list segments into an array of item pointers.
+* The number of items is returned in *ndecoded_out. The segments are stored
+* one after each other, with total size 'len' bytes.
+*/
 ItemPointer
 ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_out)
 {
 	ItemPointer result;
 	int			nallocated;
 	uint64		val;
-	char	   *endseg = ((char *) segment) + len;
+	char	   *endseg = ((char *)segment) + len;
 	int			ndecoded;
 	unsigned char *ptr;
 	unsigned char *endptr;
 
 	/*
-	 * Guess an initial size of the array.
-	 */
+	* Guess an initial size of the array.
+	*/
 	nallocated = segment->nbytes * 2 + 1;
 	result = palloc(nallocated * sizeof(ItemPointerData));
 
 	ndecoded = 0;
-	while ((char *) segment < endseg)
+	while ((char *)segment < endseg)
 	{
 		/* enlarge output array if needed */
 		if (ndecoded >= nallocated)
@@ -326,6 +352,72 @@ ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_
 			val += decode_varbyte(&ptr);
 
 			uint64_to_itemptr(val, &result[ndecoded]);
+			ndecoded++;
+		}
+		segment = GinNextPostingListSegment(segment);
+	}
+
+	if (ndecoded_out)
+		*ndecoded_out = ndecoded;
+	return result;
+}
+
+/*
+ * Decode multiple posting list segments into an array of gin pointers.
+ * The number of items is returned in *ndecoded_out. The segments are stored
+ * one after each other, with total size 'len' bytes.
+ */
+GinPointer
+ginPostingListDecodeAllSegmentsToGinPointers(GinPostingList *segment, int len, int *ndecoded_out)
+{
+	GinPointer result;
+	GinPointerData item;
+	int			nallocated;
+	uint64		val;
+	char	   *endseg = ((char *) segment) + len;
+	int			ndecoded;
+	unsigned char *ptr;
+	unsigned char *endptr;
+
+	/*
+	 * Guess an initial size of the array.
+	 */
+	nallocated = segment->nbytes * 2 + 1;
+	result = palloc(nallocated * sizeof(GinPointer));
+
+	ndecoded = 0;
+	while ((char *) segment < endseg)
+	{
+		/* enlarge output array if needed */
+		if (ndecoded >= nallocated)
+		{
+			nallocated *= 2;
+			result = repalloc(result, nallocated * sizeof(GinPointer));
+		}
+
+		ItemPointerToGinPointer(&segment->first, &item);
+
+		/* copy the first item */
+		Assert(OffsetNumberIsValid(GinPointerGetOffsetNumber(&item)));
+		Assert(ndecoded == 0 || ginComparePointers(&item, &result[ndecoded - 1]) > 0);
+		result[ndecoded] = item;
+		ndecoded++;
+
+		val = itemptr_to_uint64(&segment->first);
+		ptr = segment->bytes;
+		endptr = segment->bytes + segment->nbytes;
+		while (ptr < endptr)
+		{
+			/* enlarge output array if needed */
+			if (ndecoded >= nallocated)
+			{
+				nallocated *= 2;
+				result = repalloc(result, nallocated * sizeof(GinPointer));
+			}
+
+			val += decode_varbyte(&ptr);
+
+			uint64_to_ginptr(val, &result[ndecoded]);
 			ndecoded++;
 		}
 		segment = GinNextPostingListSegment(segment);

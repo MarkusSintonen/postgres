@@ -170,6 +170,54 @@ typedef struct GinMetaPageData
 	(GinItemPointerGetOffsetNumber(p) == (OffsetNumber)0xffff && \
 	 GinItemPointerGetBlockNumber(p) != InvalidBlockNumber)
 
+typedef uint64 GinPointerData;
+typedef GinPointerData *GinPointer;
+
+#define GinPointerGetBlockNumber(p)  \
+	(BlockNumber)(((GinPointerData)*p) >> 32)
+#define GinPointerGetOffsetNumber(p)  \
+	(OffsetNumber)(((GinPointerData)*p) & 0xffffffff)
+#define GinPointerSetBlockNumber(p, block)  \
+	((*p) = (((GinPointerData)*p) & 0xffffffff) | ((GinPointerData)(BlockNumber)block << 32))
+#define GinPointerSetOffsetNumber(p, offset)  \
+	((*p) = (((GinPointerData)*p) & 0xffffffff00000000) | (GinPointerData)(OffsetNumber)offset)
+#define GinPointerSet(p, block, offset)  \
+	((*p) = (GinPointerData)(BlockNumber)block << 32 | (GinPointerData)(OffsetNumber)offset)
+
+#define ItemPointerToGinPointer(ip, gp)  \
+	((*gp) = (GinPointerData)GinItemPointerGetBlockNumber(ip) << 32 | (GinPointerData)GinItemPointerGetOffsetNumber(ip))
+
+#define GinPointerToItemPointer(gp, ip)  \
+	ItemPointerSet(ip, GinPointerGetBlockNumber(gp), GinPointerGetOffsetNumber(gp))
+
+#define GinPointerSetMin(p)  \
+	((*p) = (GinPointerData)0)
+#define GinPointerIsMin(p)  \
+	((*p) == (GinPointerData)0)
+#define GinPointerSetMax(p)  \
+	GinPointerSet((p), InvalidBlockNumber, 0xffff)
+#define GinPointerIsMax(p)  \
+	(GinPointerGetOffsetNumber(p) == 0xffff &&  \
+	 GinPointerGetBlockNumber(p) == InvalidBlockNumber)
+#define GinPointerSetLossyPage(p, block)  \
+	GinPointerSet((p), (block), 0xffff)
+#define GinPointerIsLossyPage(p)  \
+	(GinPointerGetOffsetNumber(p) == 0xffff && \
+	 GinPointerGetBlockNumber(p) != InvalidBlockNumber)
+#define GinPointerSetInvalid(p)  \
+	GinPointerSet((p), InvalidBlockNumber, InvalidOffsetNumber)
+#define GinPointerIsValid(p)  \
+	(PointerIsValid(p) && \
+	 GinPointerGetOffsetNumber(p) != 0)
+
+static void
+itemPointersToGinPointers(ItemPointer ip, GinPointer gp, int nitems)
+{
+	int i;
+	for (i = 0; i < nitems; ++i)
+		ItemPointerToGinPointer(&ip[i], &gp[i]);
+}
+
 /*
  * Posting item in a non-leaf posting-tree page
  */

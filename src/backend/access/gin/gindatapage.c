@@ -130,10 +130,10 @@ static void dataPlaceToPageLeafSplit(disassembledLeaf *leaf,
  * still check all the returned items. But passing it allows this function to
  * skip whole posting lists.
  */
-ItemPointer
-GinDataLeafPageGetItems(Page page, int *nitems, ItemPointerData advancePast)
+GinPointer
+GinDataLeafPageGetItems(Page page, int *nitems, GinPointerData advancePast)
 {
-	ItemPointer result;
+	GinPointer result;
 
 	if (GinPageIsCompressed(page))
 	{
@@ -143,11 +143,11 @@ GinDataLeafPageGetItems(Page page, int *nitems, ItemPointerData advancePast)
 		GinPostingList *next;
 
 		/* Skip to the segment containing advancePast+1 */
-		if (ItemPointerIsValid(&advancePast))
+		if (GinPointerIsValid(&advancePast))
 		{
 			next = GinNextPostingListSegment(seg);
 			while ((Pointer) next < endptr &&
-				   ginCompareItemPointers(&next->first, &advancePast) <= 0)
+				   ginComparePointerWithItemPointer(&advancePast, &next->first) > 0)
 			{
 				seg = next;
 				next = GinNextPostingListSegment(seg);
@@ -156,7 +156,7 @@ GinDataLeafPageGetItems(Page page, int *nitems, ItemPointerData advancePast)
 		}
 
 		if (len > 0)
-			result = ginPostingListDecodeAllSegments(seg, len, nitems);
+			result = ginPostingListDecodeAllSegmentsToGinPointers(seg, len, nitems);
 		else
 		{
 			result = NULL;
@@ -167,8 +167,8 @@ GinDataLeafPageGetItems(Page page, int *nitems, ItemPointerData advancePast)
 	{
 		ItemPointer tmp = dataLeafPageGetUncompressed(page, nitems);
 
-		result = palloc((*nitems) * sizeof(ItemPointerData));
-		memcpy(result, tmp, (*nitems) * sizeof(ItemPointerData));
+		result = palloc((*nitems) * sizeof(GinPointerData));
+		itemPointersToGinPointers(tmp, result, *nitems);
 	}
 
 	return result;

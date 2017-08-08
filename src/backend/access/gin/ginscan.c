@@ -103,7 +103,7 @@ ginFillScanEntry(GinScanOpaque so, OffsetNumber attnum,
 	scanEntry->attnum = attnum;
 
 	scanEntry->buffer = InvalidBuffer;
-	ItemPointerSetMin(&scanEntry->curItem);
+	GinPointerSetMin(&scanEntry->curItem);
 	scanEntry->matchBitmap = NULL;
 	scanEntry->matchIterator = NULL;
 	scanEntry->matchResult = NULL;
@@ -157,7 +157,7 @@ ginFillScanKey(GinScanOpaque so, OffsetNumber attnum,
 	key->searchMode = searchMode;
 	key->attnum = attnum;
 
-	ItemPointerSetMin(&key->curItem);
+	GinPointerSetMin(&key->curItem);
 	key->curItemMatches = false;
 	key->recheckCurItem = false;
 	key->isFinished = false;

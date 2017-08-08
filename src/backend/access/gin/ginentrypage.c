@@ -154,14 +154,14 @@ GinFormTuple(GinState *ginstate,
 }
 
 /*
- * Read item pointers from leaf entry tuple.
- *
- * Returns a palloc'd array of ItemPointers. The number of items is returned
- * in *nitems.
- */
+* Read item pointers from leaf entry tuple.
+*
+* Returns a palloc'd array of ItemPointers. The number of items is returned
+* in *nitems.
+*/
 ItemPointer
 ginReadTuple(GinState *ginstate, OffsetNumber attnum, IndexTuple itup,
-			 int *nitems)
+	int *nitems)
 {
 	Pointer		ptr = GinGetPosting(itup);
 	int			nipd = GinGetNPosting(itup);
@@ -172,10 +172,10 @@ ginReadTuple(GinState *ginstate, OffsetNumber attnum, IndexTuple itup,
 	{
 		if (nipd > 0)
 		{
-			ipd = ginPostingListDecode((GinPostingList *) ptr, &ndecoded);
+			ipd = ginPostingListDecode((GinPostingList *)ptr, &ndecoded);
 			if (nipd != ndecoded)
 				elog(ERROR, "number of items mismatch in GIN entry tuple, %d in tuple header, %d decoded",
-					 nipd, ndecoded);
+					nipd, ndecoded);
 		}
 		else
 		{
@@ -184,11 +184,49 @@ ginReadTuple(GinState *ginstate, OffsetNumber attnum, IndexTuple itup,
 	}
 	else
 	{
-		ipd = (ItemPointer) palloc(sizeof(ItemPointerData) * nipd);
+		ipd = (ItemPointer)palloc(sizeof(ItemPointerData) * nipd);
 		memcpy(ipd, ptr, sizeof(ItemPointerData) * nipd);
 	}
 	*nitems = nipd;
 	return ipd;
+}
+
+/*
+ * Read gin pointers from leaf entry tuple.
+ *
+ * Returns a palloc'd array of GinPointers. The number of items is returned
+ * in *nitems.
+ */
+GinPointer
+ginReadTupleToGinPointers(GinState *ginstate, OffsetNumber attnum, IndexTuple itup,
+			 int *nitems)
+{
+	Pointer		ptr = GinGetPosting(itup);
+	int			nipd = GinGetNPosting(itup);
+	GinPointer  gpd;
+	int			ndecoded;
+
+	if (GinItupIsCompressed(itup))
+	{
+		if (nipd > 0)
+		{
+			gpd = ginPostingListDecodeToGinPointers((GinPostingList *) ptr, &ndecoded);
+			if (nipd != ndecoded)
+				elog(ERROR, "number of items mismatch in GIN entry tuple, %d in tuple header, %d decoded",
+					 nipd, ndecoded);
+		}
+		else
+		{
+			gpd = palloc(0);
+		}
+	}
+	else
+	{
+		gpd = (GinPointer) palloc(sizeof(GinPointerData) * nipd);
+		itemPointersToGinPointers((ItemPointer)ptr, gpd, nipd);
+	}
+	*nitems = nipd;
+	return gpd;
 }
 
 /*

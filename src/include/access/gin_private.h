@@ -211,9 +211,11 @@ extern void ginPrepareEntryScan(GinBtree btree, OffsetNumber attnum,
 extern void ginEntryFillRoot(GinBtree btree, Page root, BlockNumber lblkno, Page lpage, BlockNumber rblkno, Page rpage);
 extern ItemPointer ginReadTuple(GinState *ginstate, OffsetNumber attnum,
 			 IndexTuple itup, int *nitems);
+extern GinPointer ginReadTupleToGinPointers(GinState *ginstate, OffsetNumber attnum,
+			 IndexTuple itup, int *nitems);
 
 /* gindatapage.c */
-extern ItemPointer GinDataLeafPageGetItems(Page page, int *nitems, ItemPointerData advancePast);
+extern GinPointer GinDataLeafPageGetItems(Page page, int *nitems, GinPointerData advancePast);
 extern int	GinDataLeafPageGetItemsToTbm(Page page, TIDBitmap *tbm);
 extern BlockNumber createPostingTree(Relation index,
 				  ItemPointerData *items, uint32 nitems,
@@ -305,7 +307,7 @@ typedef struct GinScanKeyData
 	 * isFinished means that all the input entry streams are finished, so this
 	 * key cannot succeed for any later TIDs.
 	 */
-	ItemPointerData curItem;
+	GinPointerData curItem;
 	bool		curItemMatches;
 	bool		recheckCurItem;
 	bool		isFinished;
@@ -326,7 +328,7 @@ typedef struct GinScanEntryData
 	Buffer		buffer;
 
 	/* current ItemPointer to heap */
-	ItemPointerData curItem;
+	GinPointerData curItem;
 
 	/* for a partial-match or full-scan query, we accumulate all TIDs here */
 	TIDBitmap  *matchBitmap;
@@ -334,7 +336,7 @@ typedef struct GinScanEntryData
 	TBMIterateResult *matchResult;
 
 	/* used for Posting list and one page in Posting tree */
-	ItemPointerData *list;
+	GinPointerData *list;
 	int			nlist;
 	OffsetNumber offset;
 
@@ -448,20 +450,53 @@ extern GinPostingList *ginCompressPostingList(const ItemPointer ptrs, int nptrs,
 extern int	ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int totalsize, TIDBitmap *tbm);
 
 extern ItemPointer ginPostingListDecodeAllSegments(GinPostingList *ptr, int len, int *ndecoded);
+extern GinPointer ginPostingListDecodeAllSegmentsToGinPointers(GinPostingList *ptr, int len, int *ndecoded);
 extern ItemPointer ginPostingListDecode(GinPostingList *ptr, int *ndecoded);
+extern GinPointer ginPostingListDecodeToGinPointers(GinPostingList *ptr, int *ndecoded);
 extern ItemPointer ginMergeItemPointers(ItemPointerData *a, uint32 na,
 					 ItemPointerData *b, uint32 nb,
 					 int *nmerged);
 
 /*
  * Merging the results of several gin scans compares item pointers a lot,
- * so we want this to be inlined.
+ * so we want these to be inlined.
  */
+
 static inline int
 ginCompareItemPointers(ItemPointer a, ItemPointer b)
 {
 	uint64		ia = (uint64) GinItemPointerGetBlockNumber(a) << 32 | GinItemPointerGetOffsetNumber(a);
 	uint64		ib = (uint64) GinItemPointerGetBlockNumber(b) << 32 | GinItemPointerGetOffsetNumber(b);
+
+	if (ia == ib)
+		return 0;
+	else if (ia > ib)
+		return 1;
+	else
+		return -1;
+}
+
+static inline int
+ginComparePointerWithItemPointer(GinPointer gp, ItemPointer ip)
+{
+	GinPointerData ia = *gp;
+	GinPointerData ib;
+
+	ItemPointerToGinPointer(ip, &ib);
+
+	if (ia == ib)
+		return 0;
+	else if (ia > ib)
+		return 1;
+	else
+		return -1;
+}
+
+static inline int
+ginComparePointers(GinPointer a, GinPointer b)
+{
+	GinPointerData ia = *a;
+	GinPointerData ib = *b;
 
 	if (ia == ib)
 		return 0;

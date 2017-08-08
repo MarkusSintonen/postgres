@@ -303,7 +303,7 @@ startScanEntry(GinState *ginstate, GinScanEntry entry, Snapshot snapshot)
 
 restartScanEntry:
 	entry->buffer = InvalidBuffer;
-	ItemPointerSetMin(&entry->curItem);
+	GinPointerSetMin(&entry->curItem);
 	entry->offset = InvalidOffsetNumber;
 	if (entry->list)
 		pfree(entry->list);
@@ -375,7 +375,7 @@ restartScanEntry:
 			BlockNumber rootPostingTree = GinGetPostingTree(itup);
 			GinBtreeStack *stack;
 			Page		page;
-			ItemPointerData minItem;
+			GinPointerData minItem;
 
 			/*
 			 * We should unlock entry page before touching posting tree to
@@ -403,7 +403,7 @@ restartScanEntry:
 			/*
 			 * Load the first page into memory.
 			 */
-			ItemPointerSetMin(&minItem);
+			GinPointerSetMin(&minItem);
 			entry->list = GinDataLeafPageGetItems(page, &entry->nlist, minItem);
 
 			entry->predictNumberResult = stack->predictNumber * entry->nlist;
@@ -414,8 +414,8 @@ restartScanEntry:
 		}
 		else if (GinGetNPosting(itup) > 0)
 		{
-			entry->list = ginReadTuple(ginstate, entry->attnum, itup,
-									   &entry->nlist);
+			entry->list = ginReadTupleToGinPointers(ginstate, entry->attnum, itup,
+													&entry->nlist);
 			entry->predictNumberResult = entry->nlist;
 
 			entry->isFinished = FALSE;
@@ -456,7 +456,7 @@ startScanKey(GinState *ginstate, GinScanOpaque so, GinScanKey key)
 	int			j;
 	int		   *entryIndexes;
 
-	ItemPointerSetMin(&key->curItem);
+	GinPointerSetMin(&key->curItem);
 	key->curItemMatches = false;
 	key->recheckCurItem = false;
 	key->isFinished = false;
@@ -586,7 +586,7 @@ startScan(IndexScanDesc scan)
  */
 static void
 entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
-				   ItemPointerData advancePast, Snapshot snapshot)
+				   GinPointerData advancePast, Snapshot snapshot)
 {
 	Page		page;
 	int			i;
@@ -604,7 +604,7 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 	 * advancePast equals the current item, the next matching item should be
 	 * on the next page, so we step right. Otherwise, descend from root.
 	 */
-	if (ginCompareItemPointers(&entry->curItem, &advancePast) == 0)
+	if (ginComparePointers(&entry->curItem, &advancePast) == 0)
 	{
 		stepright = true;
 		LockBuffer(entry->buffer, GIN_SHARE);
@@ -618,17 +618,17 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 		/*
 		 * Set the search key, and find the correct leaf page.
 		 */
-		if (ItemPointerIsLossyPage(&advancePast))
+		if (GinPointerIsLossyPage(&advancePast))
 		{
 			ItemPointerSet(&entry->btree.itemptr,
-						   GinItemPointerGetBlockNumber(&advancePast) + 1,
+						   GinPointerGetBlockNumber(&advancePast) + 1,
 						   FirstOffsetNumber);
 		}
 		else
 		{
 			ItemPointerSet(&entry->btree.itemptr,
-						   GinItemPointerGetBlockNumber(&advancePast),
-						   OffsetNumberNext(GinItemPointerGetOffsetNumber(&advancePast)));
+						   GinPointerGetBlockNumber(&advancePast),
+						   OffsetNumberNext(GinPointerGetOffsetNumber(&advancePast)));
 		}
 		entry->btree.fullScan = false;
 		stack = ginFindLeafPage(&entry->btree, true, snapshot);
@@ -641,8 +641,8 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 	}
 
 	elog(DEBUG2, "entryLoadMoreItems, %u/%u, skip: %d",
-		 GinItemPointerGetBlockNumber(&advancePast),
-		 GinItemPointerGetOffsetNumber(&advancePast),
+		 GinPointerGetBlockNumber(&advancePast),
+		 GinPointerGetOffsetNumber(&advancePast),
 		 !stepright);
 
 	page = BufferGetPage(entry->buffer);
@@ -692,7 +692,7 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 		 * page.
 		 */
 		if (!GinPageRightMost(page) &&
-			ginCompareItemPointers(&advancePast, GinDataPageGetRightBound(page)) >= 0)
+			ginComparePointerWithItemPointer(&advancePast, GinDataPageGetRightBound(page)) >= 0)
 		{
 			/*
 			 * the item we're looking is > the right bound of the page, so it
@@ -705,7 +705,7 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 
 		for (i = 0; i < entry->nlist; i++)
 		{
-			if (ginCompareItemPointers(&advancePast, &entry->list[i]) < 0)
+			if (ginComparePointers(&advancePast, &entry->list[i]) < 0)
 			{
 				entry->offset = i;
 
@@ -741,18 +741,18 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
  */
 static void
 entryGetItem(GinState *ginstate, GinScanEntry entry,
-			 ItemPointerData advancePast, Snapshot snapshot)
+			 GinPointerData advancePast, Snapshot snapshot)
 {
 	Assert(!entry->isFinished);
 
-	Assert(!ItemPointerIsValid(&entry->curItem) ||
-		   ginCompareItemPointers(&entry->curItem, &advancePast) <= 0);
+	Assert(!GinPointerIsValid(&entry->curItem) ||
+		   ginComparePointers(&entry->curItem, &advancePast) <= 0);
 
 	if (entry->matchBitmap)
 	{
 		/* A bitmap result */
-		BlockNumber advancePastBlk = GinItemPointerGetBlockNumber(&advancePast);
-		OffsetNumber advancePastOff = GinItemPointerGetOffsetNumber(&advancePast);
+		BlockNumber advancePastBlk = GinPointerGetBlockNumber(&advancePast);
+		OffsetNumber advancePastOff = GinPointerGetOffsetNumber(&advancePast);
 		bool		gotitem = false;
 
 		do
@@ -765,14 +765,14 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 				   (entry->matchResult->ntuples >= 0 &&
 					entry->offset >= entry->matchResult->ntuples) ||
 				   entry->matchResult->blockno < advancePastBlk ||
-				   (ItemPointerIsLossyPage(&advancePast) &&
+				   (GinPointerIsLossyPage(&advancePast) &&
 					entry->matchResult->blockno == advancePastBlk))
 			{
 				entry->matchResult = tbm_iterate(entry->matchIterator);
 
 				if (entry->matchResult == NULL)
 				{
-					ItemPointerSetInvalid(&entry->curItem);
+					GinPointerSetInvalid(&entry->curItem);
 					tbm_end_iterate(entry->matchIterator);
 					entry->matchIterator = NULL;
 					entry->isFinished = TRUE;
@@ -796,7 +796,7 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 			 */
 			if (entry->matchResult->ntuples < 0)
 			{
-				ItemPointerSetLossyPage(&entry->curItem,
+				GinPointerSetLossyPage(&entry->curItem,
 										entry->matchResult->blockno);
 
 				/*
@@ -830,7 +830,7 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 					entry->offset++;
 			}
 
-			ItemPointerSet(&entry->curItem,
+			GinPointerSet(&entry->curItem,
 						   entry->matchResult->blockno,
 						   entry->matchResult->offsets[entry->offset]);
 			entry->offset++;
@@ -847,13 +847,13 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 		{
 			if (entry->offset >= entry->nlist)
 			{
-				ItemPointerSetInvalid(&entry->curItem);
+				GinPointerSetInvalid(&entry->curItem);
 				entry->isFinished = TRUE;
 				break;
 			}
 
 			entry->curItem = entry->list[entry->offset++];
-		} while (ginCompareItemPointers(&entry->curItem, &advancePast) <= 0);
+		} while (ginComparePointers(&entry->curItem, &advancePast) <= 0);
 		/* XXX: shouldn't we apply the fuzzy search limit here? */
 	}
 	else
@@ -868,14 +868,14 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 
 				if (entry->isFinished)
 				{
-					ItemPointerSetInvalid(&entry->curItem);
+					GinPointerSetInvalid(&entry->curItem);
 					return;
 				}
 			}
 
 			entry->curItem = entry->list[entry->offset++];
 
-		} while (ginCompareItemPointers(&entry->curItem, &advancePast) <= 0 ||
+		} while (ginComparePointers(&entry->curItem, &advancePast) <= 0 ||
 				 (entry->reduceResult == TRUE && dropItem(entry)));
 	}
 }
@@ -903,10 +903,10 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
  */
 static void
 keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
-		   ItemPointerData advancePast, Snapshot snapshot)
+		   GinPointerData advancePast, Snapshot snapshot)
 {
-	ItemPointerData minItem;
-	ItemPointerData curPageLossy;
+	GinPointerData minItem;
+	GinPointerData curPageLossy;
 	uint32		i;
 	bool		haveLossyEntry;
 	GinScanEntry entry;
@@ -921,7 +921,7 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
 	 * (Note: the ">" case can happen, if advancePast is exact but we
 	 * previously had to set curItem to a lossy-page pointer.)
 	 */
-	if (ginCompareItemPointers(&key->curItem, &advancePast) > 0)
+	if (ginComparePointers(&key->curItem, &advancePast) > 0)
 		return;
 
 	/*
@@ -932,7 +932,7 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
 	 * same page.  So we'll prefer to return exact pointers not lossy
 	 * pointers, which is good.
 	 */
-	ItemPointerSetMax(&minItem);
+	GinPointerSetMax(&minItem);
 	allFinished = true;
 	for (i = 0; i < key->nrequired; i++)
 	{
@@ -948,7 +948,7 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
 		 * ItemPointerSetMin, this ensures we fetch the first item for each
 		 * entry on the first call.
 		 */
-		if (ginCompareItemPointers(&entry->curItem, &advancePast) <= 0)
+		if (ginComparePointers(&entry->curItem, &advancePast) <= 0)
 		{
 			entryGetItem(ginstate, entry, advancePast, snapshot);
 			if (entry->isFinished)
@@ -956,7 +956,7 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
 		}
 
 		allFinished = false;
-		if (ginCompareItemPointers(&entry->curItem, &minItem) < 0)
+		if (ginComparePointers(&entry->curItem, &minItem) < 0)
 			minItem = entry->curItem;
 	}
 
@@ -975,22 +975,22 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
 	 * items. However, there might be exact items for the same page among
 	 * additionalEntries, so we mustn't advance past them.
 	 */
-	if (ItemPointerIsLossyPage(&minItem))
+	if (GinPointerIsLossyPage(&minItem))
 	{
-		if (GinItemPointerGetBlockNumber(&advancePast) <
-			GinItemPointerGetBlockNumber(&minItem))
+		if (GinPointerGetBlockNumber(&advancePast) <
+			GinPointerGetBlockNumber(&minItem))
 		{
-			ItemPointerSet(&advancePast,
-						   GinItemPointerGetBlockNumber(&minItem),
-						   InvalidOffsetNumber);
+			GinPointerSet(&advancePast,
+						  GinPointerGetBlockNumber(&minItem),
+						  InvalidOffsetNumber);
 		}
 	}
 	else
 	{
-		Assert(GinItemPointerGetOffsetNumber(&minItem) > 0);
-		ItemPointerSet(&advancePast,
-					   GinItemPointerGetBlockNumber(&minItem),
-					   OffsetNumberPrev(GinItemPointerGetOffsetNumber(&minItem)));
+		Assert(GinPointerGetOffsetNumber(&minItem) > 0);
+		GinPointerSet(&advancePast,
+					   GinPointerGetBlockNumber(&minItem),
+					   OffsetNumberPrev(GinPointerGetOffsetNumber(&minItem)));
 	}
 
 	/*
@@ -1008,7 +1008,7 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
 		if (entry->isFinished)
 			continue;
 
-		if (ginCompareItemPointers(&entry->curItem, &advancePast) <= 0)
+		if (ginComparePointers(&entry->curItem, &advancePast) <= 0)
 		{
 			entryGetItem(ginstate, entry, advancePast, snapshot);
 			if (entry->isFinished)
@@ -1020,9 +1020,9 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
 		 * larger than minItem. But if minItem is a lossy page, then there
 		 * might be exact items on the same page among additionalEntries.
 		 */
-		if (ginCompareItemPointers(&entry->curItem, &minItem) < 0)
+		if (ginComparePointers(&entry->curItem, &minItem) < 0)
 		{
-			Assert(ItemPointerIsLossyPage(&minItem));
+			Assert(GinPointerIsLossyPage(&minItem));
 			minItem = entry->curItem;
 		}
 	}
@@ -1058,14 +1058,14 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
 	 * entry array, but they aren't relevant yet.
 	 */
 	key->curItem = minItem;
-	ItemPointerSetLossyPage(&curPageLossy,
-							GinItemPointerGetBlockNumber(&key->curItem));
+	GinPointerSetLossyPage(&curPageLossy,
+							GinPointerGetBlockNumber(&key->curItem));
 	haveLossyEntry = false;
 	for (i = 0; i < key->nentries; i++)
 	{
 		entry = key->scanEntry[i];
 		if (entry->isFinished == FALSE &&
-			ginCompareItemPointers(&entry->curItem, &curPageLossy) == 0)
+			ginComparePointers(&entry->curItem, &curPageLossy) == 0)
 		{
 			if (i < key->nuserentries)
 				key->entryRes[i] = GIN_MAYBE;
@@ -1120,12 +1120,12 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
 		 * This case can't currently happen, because we loaded all the entries
 		 * for this item earlier.
 		 */
-		else if (ginCompareItemPointers(&entry->curItem, &advancePast) <= 0)
+		else if (ginComparePointers(&entry->curItem, &advancePast) <= 0)
 			key->entryRes[i] = GIN_MAYBE;
 #endif
-		else if (ginCompareItemPointers(&entry->curItem, &curPageLossy) == 0)
+		else if (ginComparePointers(&entry->curItem, &curPageLossy) == 0)
 			key->entryRes[i] = GIN_MAYBE;
-		else if (ginCompareItemPointers(&entry->curItem, &minItem) == 0)
+		else if (ginComparePointers(&entry->curItem, &minItem) == 0)
 			key->entryRes[i] = GIN_TRUE;
 		else
 			key->entryRes[i] = GIN_FALSE;
@@ -1182,8 +1182,8 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
  * keyGetItem() the combination logic is known only to the consistentFn.
  */
 static bool
-scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
-			ItemPointerData *item, bool *recheck)
+scanGetItem(IndexScanDesc scan, GinPointerData advancePast,
+			GinPointerData *item, bool *recheck)
 {
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 	uint32		i;
@@ -1212,7 +1212,7 @@ scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
 	 */
 	do
 	{
-		ItemPointerSetMin(item);
+		GinPointerSetMin(item);
 		match = true;
 		for (i = 0; i < so->nkeys && match; i++)
 		{
@@ -1243,22 +1243,22 @@ scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
 			 * Beware of lossy pointers, though; from a lossy pointer, we can
 			 * only conclude that nothing smaller than this *block* matches.
 			 */
-			if (ItemPointerIsLossyPage(&key->curItem))
+			if (GinPointerIsLossyPage(&key->curItem))
 			{
-				if (GinItemPointerGetBlockNumber(&advancePast) <
-					GinItemPointerGetBlockNumber(&key->curItem))
+				if (GinPointerGetBlockNumber(&advancePast) <
+					GinPointerGetBlockNumber(&key->curItem))
 				{
-					ItemPointerSet(&advancePast,
-								   GinItemPointerGetBlockNumber(&key->curItem),
-								   InvalidOffsetNumber);
+					GinPointerSet(&advancePast,
+								  GinPointerGetBlockNumber(&key->curItem),
+								  InvalidOffsetNumber);
 				}
 			}
 			else
 			{
 				Assert(GinItemPointerGetOffsetNumber(&key->curItem) > 0);
-				ItemPointerSet(&advancePast,
-							   GinItemPointerGetBlockNumber(&key->curItem),
-							   OffsetNumberPrev(GinItemPointerGetOffsetNumber(&key->curItem)));
+				GinPointerSet(&advancePast,
+							  GinPointerGetBlockNumber(&key->curItem),
+							  OffsetNumberPrev(GinPointerGetOffsetNumber(&key->curItem)));
 			}
 
 			/*
@@ -1277,23 +1277,23 @@ scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
 			}
 			else
 			{
-				if (ItemPointerIsLossyPage(&key->curItem) ||
-					ItemPointerIsLossyPage(item))
+				if (GinPointerIsLossyPage(&key->curItem) ||
+					GinPointerIsLossyPage(item))
 				{
-					Assert(GinItemPointerGetBlockNumber(&key->curItem) >= GinItemPointerGetBlockNumber(item));
-					match = (GinItemPointerGetBlockNumber(&key->curItem) ==
-							 GinItemPointerGetBlockNumber(item));
+					Assert(GinPointerGetBlockNumber(&key->curItem) >= GinPointerGetBlockNumber(item));
+					match = (GinPointerGetBlockNumber(&key->curItem) ==
+							 GinPointerGetBlockNumber(item));
 				}
 				else
 				{
-					Assert(ginCompareItemPointers(&key->curItem, item) >= 0);
-					match = (ginCompareItemPointers(&key->curItem, item) == 0);
+					Assert(ginComparePointers(&key->curItem, item) >= 0);
+					match = (ginComparePointers(&key->curItem, item) == 0);
 				}
 			}
 		}
 	} while (!match);
 
-	Assert(!ItemPointerIsMin(item));
+	Assert(!GinPointerIsMin(item));
 
 	/*
 	 * Now *item contains the first ItemPointer after previous result that
@@ -1796,6 +1796,7 @@ gingetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 {
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 	int64		ntids;
+	GinPointerData gptr;
 	ItemPointerData iptr;
 	bool		recheck;
 
@@ -1828,19 +1829,24 @@ gingetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	 */
 	startScan(scan);
 
-	ItemPointerSetMin(&iptr);
+	GinPointerSetMin(&gptr);
 
 	for (;;)
 	{
 		CHECK_FOR_INTERRUPTS();
 
-		if (!scanGetItem(scan, iptr, &iptr, &recheck))
+		if (!scanGetItem(scan, gptr, &gptr, &recheck))
 			break;
 
-		if (ItemPointerIsLossyPage(&iptr))
-			tbm_add_page(tbm, ItemPointerGetBlockNumber(&iptr));
+		if (GinPointerIsLossyPage(&gptr))
+		{
+			tbm_add_page(tbm, GinPointerGetBlockNumber(&gptr));
+		}
 		else
+		{
+			GinPointerToItemPointer(&gptr, &iptr);
 			tbm_add_tuples(tbm, &iptr, 1, recheck);
+		}
 		ntids++;
 	}
 
