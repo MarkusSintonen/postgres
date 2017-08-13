@@ -101,13 +101,8 @@ uint64_to_itemptr(uint64 val, ItemPointer iptr)
 static inline void
 uint64_to_ginptr(uint64 val, GinPointer gptr)
 {
-	ItemPointerData iptr;
-
-	GinItemPointerSetOffsetNumber(&iptr, val & ((1 << MaxHeapTuplesPerPageBits) - 1));
-	val = val >> MaxHeapTuplesPerPageBits;
-	GinItemPointerSetBlockNumber(&iptr, val);
-
-	ItemPointerToGinPointer(&iptr, gptr);
+	OffsetNumber offset = val & ((1 << MaxHeapTuplesPerPageBits) - 1);
+	GinPointerSet(gptr, val >> MaxHeapTuplesPerPageBits, offset);
 
 	Assert(GinPointerIsValid(gptr));
 }

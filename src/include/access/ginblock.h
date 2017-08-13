@@ -174,26 +174,26 @@ typedef uint64 GinPointerData;
 typedef GinPointerData *GinPointer;
 
 #define GinPointerGetBlockNumber(p)  \
-	(BlockNumber)(((GinPointerData)*p) >> 32)
+	(BlockNumber)(((GinPointerData)*(p)) >> 32)
 #define GinPointerGetOffsetNumber(p)  \
-	(OffsetNumber)(((GinPointerData)*p) & 0xffffffff)
+	(OffsetNumber)(((GinPointerData)*(p)) & 0xffffffff)
 #define GinPointerSetBlockNumber(p, block)  \
-	((*p) = (((GinPointerData)*p) & 0xffffffff) | ((GinPointerData)(BlockNumber)block << 32))
+	((*(p)) = (((GinPointerData)*(p)) & 0xffffffff) | ((GinPointerData)(BlockNumber)(block) << 32))
 #define GinPointerSetOffsetNumber(p, offset)  \
-	((*p) = (((GinPointerData)*p) & 0xffffffff00000000) | (GinPointerData)(OffsetNumber)offset)
+	((*(p)) = (((GinPointerData)*(p)) & 0xffffffff00000000) | (GinPointerData)(OffsetNumber)(offset))
 #define GinPointerSet(p, block, offset)  \
-	((*p) = (GinPointerData)(BlockNumber)block << 32 | (GinPointerData)(OffsetNumber)offset)
+	((*(p)) = (GinPointerData)(BlockNumber)(block) << 32 | (GinPointerData)(OffsetNumber)(offset))
 
 #define ItemPointerToGinPointer(ip, gp)  \
-	((*gp) = (GinPointerData)GinItemPointerGetBlockNumber(ip) << 32 | (GinPointerData)GinItemPointerGetOffsetNumber(ip))
+	((*(gp)) = (GinPointerData)GinItemPointerGetBlockNumber(ip) << 32 | (GinPointerData)GinItemPointerGetOffsetNumber(ip))
 
 #define GinPointerToItemPointer(gp, ip)  \
-	ItemPointerSet(ip, GinPointerGetBlockNumber(gp), GinPointerGetOffsetNumber(gp))
+	ItemPointerSet((ip), GinPointerGetBlockNumber(gp), GinPointerGetOffsetNumber(gp))
 
 #define GinPointerSetMin(p)  \
-	((*p) = (GinPointerData)0)
+	((*(p)) = (GinPointerData)0)
 #define GinPointerIsMin(p)  \
-	((*p) == (GinPointerData)0)
+	((*(p)) == (GinPointerData)0)
 #define GinPointerSetMax(p)  \
 	GinPointerSet((p), InvalidBlockNumber, 0xffff)
 #define GinPointerIsMax(p)  \
@@ -210,8 +210,8 @@ typedef GinPointerData *GinPointer;
 	(PointerIsValid(p) && \
 	 GinPointerGetOffsetNumber(p) != 0)
 
-static void
-itemPointersToGinPointers(ItemPointer ip, GinPointer gp, int nitems)
+static inline void
+itemPointersToGinPointers(const ItemPointer ip, GinPointer gp, int nitems)
 {
 	int i;
 	for (i = 0; i < nitems; ++i)
