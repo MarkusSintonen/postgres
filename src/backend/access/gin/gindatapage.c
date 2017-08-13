@@ -147,7 +147,7 @@ GinDataLeafPageGetItems(Page page, int *nitems, GinPointerData advancePast)
 		{
 			next = GinNextPostingListSegment(seg);
 			while ((Pointer) next < endptr &&
-				   ginComparePointerWithItemPointer(&advancePast, &next->first) > 0)
+				   ginComparePointerWithItemPointer(advancePast, &next->first) > 0)
 			{
 				seg = next;
 				next = GinNextPostingListSegment(seg);

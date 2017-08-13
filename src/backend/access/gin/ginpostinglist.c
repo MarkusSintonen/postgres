@@ -394,7 +394,7 @@ ginPostingListDecodeAllSegmentsToGinPointers(GinPostingList *segment, int len, i
 
 		/* copy the first item */
 		Assert(OffsetNumberIsValid(GinPointerGetOffsetNumber(&item)));
-		Assert(ndecoded == 0 || ginComparePointers(&item, &result[ndecoded - 1]) > 0);
+		Assert(ndecoded == 0 || ginComparePointers(item, result[ndecoded - 1]) > 0);
 		result[ndecoded] = item;
 		ndecoded++;
 

@@ -477,30 +477,25 @@ ginCompareItemPointers(ItemPointer a, ItemPointer b)
 }
 
 static inline int
-ginComparePointerWithItemPointer(GinPointer gp, ItemPointer ip)
+ginComparePointerWithItemPointer(GinPointerData gp, ItemPointer ip)
 {
-	GinPointerData ia = *gp;
 	GinPointerData ib;
-
 	ItemPointerToGinPointer(ip, &ib);
 
-	if (ia == ib)
+	if (gp == ib)
 		return 0;
-	else if (ia > ib)
+	else if (gp > ib)
 		return 1;
 	else
 		return -1;
 }
 
 static inline int
-ginComparePointers(GinPointer a, GinPointer b)
+ginComparePointers(GinPointerData a, GinPointerData b)
 {
-	GinPointerData ia = *a;
-	GinPointerData ib = *b;
-
-	if (ia == ib)
+	if (a == b)
 		return 0;
-	else if (ia > ib)
+	else if (a > b)
 		return 1;
 	else
 		return -1;
