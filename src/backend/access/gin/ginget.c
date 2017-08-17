@@ -277,7 +277,7 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 			ItemPointer ipd;
 			int			nipd;
 
-			ipd = ginReadTuple(btree->ginstate, scanEntry->attnum, itup, &nipd);
+			ipd = ginReadTupleToItemPointers(btree->ginstate, scanEntry->attnum, itup, &nipd);
 			tbm_add_tuples(scanEntry->matchBitmap, ipd, nipd, false);
 			scanEntry->predictNumberResult += GinGetNPosting(itup);
 			pfree(ipd);
@@ -588,9 +588,10 @@ static void
 entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 				   GinPointerData advancePast, Snapshot snapshot)
 {
-	Page		page;
-	int			i;
-	bool		stepright;
+	Page			page;
+	int				i;
+	bool			stepright;
+	GinPointerData	gp;
 
 	if (!BufferIsValid(entry->buffer))
 	{
@@ -620,13 +621,13 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 		 */
 		if (GinPointerIsLossyPage(&advancePast))
 		{
-			ItemPointerSet(&entry->btree.itemptr,
+			GinPointerSet(&entry->btree.itemptr,
 						   GinPointerGetBlockNumber(&advancePast) + 1,
 						   FirstOffsetNumber);
 		}
 		else
 		{
-			ItemPointerSet(&entry->btree.itemptr,
+			GinPointerSet(&entry->btree.itemptr,
 						   GinPointerGetBlockNumber(&advancePast),
 						   OffsetNumberNext(GinPointerGetOffsetNumber(&advancePast)));
 		}
@@ -691,14 +692,18 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 		 * entry. Keep following the right-links until we re-find the correct
 		 * page.
 		 */
-		if (!GinPageRightMost(page) &&
-			ginComparePointerWithItemPointer(advancePast, GinDataPageGetRightBound(page)) >= 0)
+		if (!GinPageRightMost(page))
 		{
-			/*
-			 * the item we're looking is > the right bound of the page, so it
-			 * can't be on this page.
-			 */
-			continue;
+			GinDataPageGetRightBoundToGinPointer(page, &gp);
+			
+			if (ginComparePointers(advancePast, gp) >= 0)
+			{
+				/*
+				* the item we're looking is > the right bound of the page, so it
+				* can't be on this page.
+				*/
+				continue;
+			}
 		}
 
 		entry->list = GinDataLeafPageGetItems(page, &entry->nlist, advancePast);
@@ -1296,7 +1301,7 @@ scanGetItem(IndexScanDesc scan, GinPointerData advancePast,
 	Assert(!GinPointerIsMin(item));
 
 	/*
-	 * Now *item contains the first ItemPointer after previous result that
+	 * Now *item contains the first GinPointer after previous result that
 	 * satisfied all the keys for that exact TID, or a lossy reference to the
 	 * same page.
 	 *

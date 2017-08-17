@@ -324,7 +324,18 @@ typedef signed char GinNullCategory;
 
 #define GinDataLeafPageGetFreeSpace(page) PageGetExactFreeSpace(page)
 
-#define GinDataPageGetRightBound(page)	((ItemPointer) PageGetContents(page))
+#define GinDataPageGetRightBoundToGinPointer(page, gp) \
+	ItemPointerToGinPointer(((ItemPointer) PageGetContents(page)), (gp))
+
+#define GinDataPageGetRightBoundToItemPointer(page, ip) \
+	((*(ip)) = (*((ItemPointer) PageGetContents(page))))
+
+#define GinDataPageSetRightBoundFromGinPointer(page, gp) \
+	GinPointerToItemPointer((gp), ((ItemPointer) PageGetContents(page)))
+
+#define GinDataPageSetRightBoundFromItemPointer(page, ip) \
+	((*((ItemPointer) PageGetContents(page))) = (*((ItemPointer)(ip))))
+
 /*
  * Pointer to the data portion of a posting tree page. For internal pages,
  * that's the beginning of the array of PostingItems. For compressed leaf

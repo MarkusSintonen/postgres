@@ -88,6 +88,21 @@ itemptr_to_uint64(const ItemPointer iptr)
 	return val;
 }
 
+static inline uint64
+ginptr_to_uint64(const GinPointer gptr)
+{
+	uint64		val;
+
+	Assert(GinPointerIsValid(gptr));
+	Assert(GinPointerGetOffsetNumber(gptr) < (1 << MaxHeapTuplesPerPageBits));
+
+	val = GinPointerGetBlockNumber(gptr);
+	val <<= MaxHeapTuplesPerPageBits;
+	val |= GinPointerGetOffsetNumber(gptr);
+
+	return val;
+}
+
 static inline void
 uint64_to_itemptr(uint64 val, ItemPointer iptr)
 {
@@ -186,7 +201,7 @@ decode_varbyte(unsigned char **ptr)
  * byte at the end, if any, is zero.
  */
 GinPostingList *
-ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
+ginCompressPostingList(const GinPointer gpd, int nipd, int maxsize,
 					   int *nwritten)
 {
 	uint64		prev;
@@ -195,6 +210,7 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 	GinPostingList *result;
 	unsigned char *ptr;
 	unsigned char *endptr;
+	ItemPointerData ipd;
 
 	maxsize = SHORTALIGN_DOWN(maxsize);
 
@@ -203,16 +219,18 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 	maxbytes = maxsize - offsetof(GinPostingList, bytes);
 	Assert(maxbytes > 0);
 
-	/* Store the first special item */
-	result->first = ipd[0];
+	GinPointerToItemPointer(&gpd[0], &ipd);
 
-	prev = itemptr_to_uint64(&result->first);
+	/* Store the first special item */
+	result->first = ipd;
+
+	prev = ginptr_to_uint64(&gpd[0]);
 
 	ptr = result->bytes;
 	endptr = result->bytes + maxbytes;
 	for (totalpacked = 1; totalpacked < nipd; totalpacked++)
 	{
-		uint64		val = itemptr_to_uint64(&ipd[totalpacked]);
+		uint64		val = ginptr_to_uint64(&gpd[totalpacked]);
 		uint64		delta = val - prev;
 
 		Assert(val > prev);
@@ -257,12 +275,12 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 #if defined (CHECK_ENCODING_ROUNDTRIP)
 	{
 		int			ndecoded;
-		ItemPointer tmp = ginPostingListDecode(result, &ndecoded);
+		GinPointer	tmp = ginPostingListDecodeToGinPointers(result, &ndecoded);
 		int			i;
 
 		Assert(ndecoded == totalpacked);
 		for (i = 0; i < ndecoded; i++)
-			Assert(memcmp(&tmp[i], &ipd[i], sizeof(ItemPointerData)) == 0);
+			Assert(memcmp(&tmp[i], &gpd[i], sizeof(ItemPointerData)) == 0);
 		pfree(tmp);
 	}
 #endif
@@ -275,9 +293,9 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
  * The number of items is returned in *ndecoded.
  */
 ItemPointer
-ginPostingListDecode(GinPostingList *plist, int *ndecoded)
+ginPostingListDecodeToItemPointers(GinPostingList *plist, int *ndecoded)
 {
-	return ginPostingListDecodeAllSegments(plist,
+	return ginPostingListDecodeAllSegmentsToItemPointers(plist,
 										   SizeOfGinPostingList(plist),
 										   ndecoded);
 }
@@ -300,7 +318,7 @@ ginPostingListDecodeToGinPointers(GinPostingList *plist, int *ndecoded)
 * one after each other, with total size 'len' bytes.
 */
 ItemPointer
-ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_out)
+ginPostingListDecodeAllSegmentsToItemPointers(GinPostingList *segment, int len, int *ndecoded_out)
 {
 	ItemPointer result;
 	int			nallocated;
@@ -433,7 +451,7 @@ ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int len,
 	int			ndecoded;
 	ItemPointer items;
 
-	items = ginPostingListDecodeAllSegments(ptr, len, &ndecoded);
+	items = ginPostingListDecodeAllSegmentsToItemPointers(ptr, len, &ndecoded);
 	tbm_add_tuples(tbm, items, ndecoded, false);
 	pfree(items);
 
@@ -446,40 +464,40 @@ ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int len,
  * Returns a palloc'd array, and *nmerged is set to the number of items in
  * the result, after eliminating duplicates.
  */
-ItemPointer
-ginMergeItemPointers(ItemPointerData *a, uint32 na,
-					 ItemPointerData *b, uint32 nb,
+GinPointer
+ginMergeGinPointers(GinPointerData *a, uint32 na,
+					 GinPointerData *b, uint32 nb,
 					 int *nmerged)
 {
-	ItemPointerData *dst;
+	GinPointerData *dst;
 
-	dst = (ItemPointer) palloc((na + nb) * sizeof(ItemPointerData));
+	dst = (GinPointer) palloc((na + nb) * sizeof(GinPointerData));
 
 	/*
 	 * If the argument arrays don't overlap, we can just append them to each
 	 * other.
 	 */
-	if (na == 0 || nb == 0 || ginCompareItemPointers(&a[na - 1], &b[0]) < 0)
+	if (na == 0 || nb == 0 || ginComparePointers(a[na - 1], b[0]) < 0)
 	{
-		memcpy(dst, a, na * sizeof(ItemPointerData));
-		memcpy(&dst[na], b, nb * sizeof(ItemPointerData));
+		memcpy(dst, a, na * sizeof(GinPointerData));
+		memcpy(&dst[na], b, nb * sizeof(GinPointerData));
 		*nmerged = na + nb;
 	}
-	else if (ginCompareItemPointers(&b[nb - 1], &a[0]) < 0)
+	else if (ginComparePointers(b[nb - 1], a[0]) < 0)
 	{
-		memcpy(dst, b, nb * sizeof(ItemPointerData));
-		memcpy(&dst[nb], a, na * sizeof(ItemPointerData));
+		memcpy(dst, b, nb * sizeof(GinPointerData));
+		memcpy(&dst[nb], a, na * sizeof(GinPointerData));
 		*nmerged = na + nb;
 	}
 	else
 	{
-		ItemPointerData *dptr = dst;
-		ItemPointerData *aptr = a;
-		ItemPointerData *bptr = b;
+		GinPointerData *dptr = dst;
+		GinPointerData *aptr = a;
+		GinPointerData *bptr = b;
 
 		while (aptr - a < na && bptr - b < nb)
 		{
-			int			cmp = ginCompareItemPointers(aptr, bptr);
+			int			cmp = ginComparePointers(*aptr, *bptr);
 
 			if (cmp > 0)
 				*dptr++ = *bptr++;

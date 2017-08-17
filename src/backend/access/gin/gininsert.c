@@ -47,14 +47,14 @@ typedef struct
 static IndexTuple
 addItemPointersToLeafTuple(GinState *ginstate,
 						   IndexTuple old,
-						   ItemPointerData *items, uint32 nitem,
+						   GinPointerData *items, uint32 nitem,
 						   GinStatsData *buildStats)
 {
 	OffsetNumber attnum;
 	Datum		key;
 	GinNullCategory category;
 	IndexTuple	res;
-	ItemPointerData *newItems,
+	GinPointerData *newItems,
 			   *oldItems;
 	int			oldNPosting,
 				newNPosting;
@@ -66,9 +66,9 @@ addItemPointersToLeafTuple(GinState *ginstate,
 	key = gintuple_get_key(ginstate, old, &category);
 
 	/* merge the old and new posting lists */
-	oldItems = ginReadTuple(ginstate, attnum, old, &oldNPosting);
+	oldItems = ginReadTupleToGinPointers(ginstate, attnum, old, &oldNPosting);
 
-	newItems = ginMergeItemPointers(items, nitem,
+	newItems = ginMergeGinPointers(items, nitem,
 									oldItems, oldNPosting,
 									&newNPosting);
 
@@ -126,7 +126,7 @@ addItemPointersToLeafTuple(GinState *ginstate,
 static IndexTuple
 buildFreshLeafTuple(GinState *ginstate,
 					OffsetNumber attnum, Datum key, GinNullCategory category,
-					ItemPointerData *items, uint32 nitem,
+					GinPointerData *items, uint32 nitem,
 					GinStatsData *buildStats)
 {
 	IndexTuple	res = NULL;
@@ -176,7 +176,7 @@ buildFreshLeafTuple(GinState *ginstate,
 void
 ginEntryInsert(GinState *ginstate,
 			   OffsetNumber attnum, Datum key, GinNullCategory category,
-			   ItemPointerData *items, uint32 nitem,
+			   GinPointerData *items, uint32 nitem,
 			   GinStatsData *buildStats)
 {
 	GinBtreeData btree;
@@ -245,7 +245,7 @@ ginEntryInsert(GinState *ginstate,
 static void
 ginHeapTupleBulkInsert(GinBuildState *buildstate, OffsetNumber attnum,
 					   Datum value, bool isNull,
-					   ItemPointer heapptr)
+					   GinPointer heapptr)
 {
 	Datum	   *entries;
 	GinNullCategory *categories;
@@ -270,21 +270,24 @@ static void
 ginBuildCallback(Relation index, HeapTuple htup, Datum *values,
 				 bool *isnull, bool tupleIsAlive, void *state)
 {
-	GinBuildState *buildstate = (GinBuildState *) state;
-	MemoryContext oldCtx;
+	GinBuildState  *buildstate = (GinBuildState *) state;
+	MemoryContext  oldCtx;
+	GinPointerData gpd;
 	int			i;
 
 	oldCtx = MemoryContextSwitchTo(buildstate->tmpCtx);
 
+	ItemPointerToGinPointer(&htup->t_self, &gpd);
+
 	for (i = 0; i < buildstate->ginstate.origTupdesc->natts; i++)
 		ginHeapTupleBulkInsert(buildstate, (OffsetNumber) (i + 1),
 							   values[i], isnull[i],
-							   &htup->t_self);
+							   &gpd);
 
 	/* If we've maxed out our available memory, dump everything to the index */
 	if (buildstate->accum.allocatedMemory >= (Size) maintenance_work_mem * 1024L)
 	{
-		ItemPointerData *list;
+		GinPointerData *list;
 		Datum		key;
 		GinNullCategory category;
 		uint32		nlist;
@@ -315,7 +318,7 @@ ginbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	GinBuildState buildstate;
 	Buffer		RootBuffer,
 				MetaBuffer;
-	ItemPointerData *list;
+	GinPointerData *list;
 	Datum		key;
 	GinNullCategory category;
 	uint32		nlist;
@@ -469,15 +472,18 @@ ginHeapTupleInsert(GinState *ginstate, OffsetNumber attnum,
 {
 	Datum	   *entries;
 	GinNullCategory *categories;
+	GinPointerData gp;
 	int32		i,
 				nentries;
 
 	entries = ginExtractEntries(ginstate, attnum, value, isNull,
 								&nentries, &categories);
 
+	ItemPointerToGinPointer(item, &gp);
+
 	for (i = 0; i < nentries; i++)
 		ginEntryInsert(ginstate, attnum, entries[i], categories[i],
-					   item, 1, NULL);
+					   &gp, 1, NULL);
 }
 
 bool

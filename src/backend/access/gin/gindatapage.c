@@ -86,7 +86,7 @@ typedef struct
 	 */
 	char		action;
 
-	ItemPointerData *modifieditems;
+	GinPointerData *modifieditems;
 	uint16		nmodifieditems;
 
 	/*
@@ -97,7 +97,7 @@ typedef struct
 	 * segment in memory. If both are set, they must represent the same items.
 	 */
 	GinPostingList *seg;
-	ItemPointer items;
+	GinPointer	items;
 	int			nitems;			/* # of items in 'items', if items != NULL */
 } leafSegmentInfo;
 
@@ -108,14 +108,14 @@ static void dataSplitPageInternal(GinBtree btree, Buffer origbuf,
 					  Page *newlpage, Page *newrpage);
 
 static disassembledLeaf *disassembleLeaf(Page page);
-static bool leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining);
-static bool addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems,
+static bool leafRepackItems(disassembledLeaf *leaf, GinPointer remaining);
+static bool addItemsToLeaf(disassembledLeaf *leaf, GinPointer newItems,
 			   int nNewItems);
 
 static void computeLeafRecompressWALData(disassembledLeaf *leaf);
 static void dataPlaceToPageLeafRecompress(Buffer buf, disassembledLeaf *leaf);
 static void dataPlaceToPageLeafSplit(disassembledLeaf *leaf,
-						 ItemPointerData lbound, ItemPointerData rbound,
+						 GinPointerData lbound, GinPointerData rbound,
 						 Page lpage, Page rpage);
 
 /*
@@ -232,12 +232,14 @@ dataLeafPageGetUncompressed(Page page, int *nitems)
 static bool
 dataIsMoveRight(GinBtree btree, Page page)
 {
-	ItemPointer iptr = GinDataPageGetRightBound(page);
+	GinPointerData gptr;
 
 	if (GinPageRightMost(page))
 		return FALSE;
 
-	return (ginCompareItemPointers(&btree->itemptr, iptr) > 0) ? TRUE : FALSE;
+	GinDataPageGetRightBoundToGinPointer(page, &gptr);
+
+	return (ginComparePointers(btree->itemptr, gptr) > 0) ? TRUE : FALSE;
 }
 
 /*
@@ -287,7 +289,7 @@ dataLocateItem(GinBtree btree, GinBtreeStack *stack)
 		else
 		{
 			pitem = GinDataPageGetPostingItem(page, mid);
-			result = ginCompareItemPointers(&btree->itemptr, &(pitem->key));
+			result = ginComparePointerWithItemPointer(btree->itemptr, &(pitem->key));
 		}
 
 		if (result == 0)
@@ -447,23 +449,23 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 						 Page *newlpage, Page *newrpage)
 {
 	GinBtreeDataLeafInsertData *items = insertdata;
-	ItemPointer newItems = &items->items[items->curitem];
+	GinPointer  newItems = &items->items[items->curitem];
 	int			maxitems = items->nitem - items->curitem;
 	Page		page = BufferGetPage(buf);
 	int			i;
-	ItemPointerData rbound;
-	ItemPointerData lbound;
+	GinPointerData rbound;
+	GinPointerData lbound;
 	bool		needsplit;
 	bool		append;
 	int			segsize;
 	Size		freespace;
 	disassembledLeaf *leaf;
 	leafSegmentInfo *lastleftinfo;
-	ItemPointerData maxOldItem;
-	ItemPointerData remaining;
+	GinPointerData maxOldItem;
+	GinPointerData remaining;
 
-	rbound = *GinDataPageGetRightBound(page);
-
+	GinDataPageGetRightBoundToGinPointer(page, &rbound);
+	
 	/*
 	 * Count how many of the new items belong to this page.
 	 */
@@ -471,7 +473,7 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	{
 		for (i = 0; i < maxitems; i++)
 		{
-			if (ginCompareItemPointers(&newItems[i], &rbound) > 0)
+			if (ginComparePointers(newItems[i], rbound) > 0)
 			{
 				/*
 				 * This needs to go to some other location in the tree. (The
@@ -497,17 +499,17 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		lastleftinfo = dlist_container(leafSegmentInfo, node,
 									   dlist_tail_node(&leaf->segments));
 		if (!lastleftinfo->items)
-			lastleftinfo->items = ginPostingListDecode(lastleftinfo->seg,
-													   &lastleftinfo->nitems);
+			lastleftinfo->items = ginPostingListDecodeToGinPointers(lastleftinfo->seg,
+																	&lastleftinfo->nitems);
 		maxOldItem = lastleftinfo->items[lastleftinfo->nitems - 1];
-		if (ginCompareItemPointers(&newItems[0], &maxOldItem) >= 0)
+		if (ginComparePointers(newItems[0], maxOldItem) >= 0)
 			append = true;
 		else
 			append = false;
 	}
 	else
 	{
-		ItemPointerSetMin(&maxOldItem);
+		GinPointerSetMin(&maxOldItem);
 		append = true;
 	}
 
@@ -570,15 +572,15 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	 * If we're appending, it's OK if they didn't. But as a sanity check,
 	 * verify that all the old items fit.
 	 */
-	if (ItemPointerIsValid(&remaining))
+	if (GinPointerIsValid(&remaining))
 	{
-		if (!append || ItemPointerCompare(&maxOldItem, &remaining) >= 0)
+		if (!append || ginComparePointers(maxOldItem, remaining) >= 0)
 			elog(ERROR, "could not split GIN page; all old items didn't fit");
 
 		/* Count how many of the new items did fit. */
 		for (i = 0; i < maxitems; i++)
 		{
-			if (ginCompareItemPointers(&newItems[i], &remaining) >= 0)
+			if (ginComparePointers(newItems[i], remaining) >= 0)
 				break;
 		}
 		if (i == 0)
@@ -670,8 +672,8 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		 */
 		lastleftinfo = dlist_container(leafSegmentInfo, node, leaf->lastleft);
 		if (!lastleftinfo->items)
-			lastleftinfo->items = ginPostingListDecode(lastleftinfo->seg,
-													   &lastleftinfo->nitems);
+			lastleftinfo->items = ginPostingListDecodeToGinPointers(lastleftinfo->seg,
+																	&lastleftinfo->nitems);
 		lbound = lastleftinfo->items[lastleftinfo->nitems - 1];
 
 		/*
@@ -742,18 +744,18 @@ ginVacuumPostingTreeLeaf(Relation indexrel, Buffer buffer, GinVacuumState *gvs)
 	{
 		leafSegmentInfo *seginfo = dlist_container(leafSegmentInfo, node, iter.cur);
 		int			oldsegsize;
-		ItemPointer cleaned;
+		GinPointer	cleaned;
 		int			ncleaned;
-
+		
 		if (!seginfo->items)
-			seginfo->items = ginPostingListDecode(seginfo->seg,
-												  &seginfo->nitems);
+			seginfo->items = ginPostingListDecodeToGinPointers(seginfo->seg,
+															   &seginfo->nitems);
 		if (seginfo->seg)
 			oldsegsize = SizeOfGinPostingList(seginfo->seg);
 		else
 			oldsegsize = GinDataPageMaxDataSize;
 
-		cleaned = ginVacuumItemPointers(gvs,
+		cleaned = ginVacuumGinPointers(gvs,
 										seginfo->items,
 										seginfo->nitems,
 										&ncleaned);
@@ -1025,7 +1027,7 @@ dataPlaceToPageLeafRecompress(Buffer buf, disassembledLeaf *leaf)
  */
 static void
 dataPlaceToPageLeafSplit(disassembledLeaf *leaf,
-						 ItemPointerData lbound, ItemPointerData rbound,
+						 GinPointerData lbound, GinPointerData rbound,
 						 Page lpage, Page rpage)
 {
 	char	   *ptr;
@@ -1065,7 +1067,7 @@ dataPlaceToPageLeafSplit(disassembledLeaf *leaf,
 	}
 	Assert(lsize == leaf->lsize);
 	GinDataPageSetDataSize(lpage, lsize);
-	*GinDataPageGetRightBound(lpage) = lbound;
+	GinDataPageSetRightBoundFromGinPointer(lpage, &lbound);
 
 	/* Copy the segments that go to the right page */
 	ptr = (char *) GinDataLeafPageGetPostingList(rpage);
@@ -1089,7 +1091,7 @@ dataPlaceToPageLeafSplit(disassembledLeaf *leaf,
 	}
 	Assert(rsize == leaf->rsize);
 	GinDataPageSetDataSize(rpage, rsize);
-	*GinDataPageGetRightBound(rpage) = rbound;
+	GinDataPageSetRightBoundFromGinPointer(rpage, &rbound);
 }
 
 /*
@@ -1250,12 +1252,14 @@ dataSplitPageInternal(GinBtree btree, Buffer origbuf,
 	int			nleftitems;
 	int			nrightitems;
 	Size		pageSize = PageGetPageSize(oldpage);
-	ItemPointerData oldbound = *GinDataPageGetRightBound(oldpage);
+	ItemPointerData oldbound;
 	ItemPointer bound;
 	Page		lpage;
 	Page		rpage;
 	OffsetNumber separator;
 	PostingItem allitems[(BLCKSZ / sizeof(PostingItem)) + 1];
+
+	GinDataPageGetRightBoundToItemPointer(oldpage, &oldbound);
 
 	lpage = PageGetTempPage(oldpage);
 	rpage = PageGetTempPage(oldpage);
@@ -1305,11 +1309,11 @@ dataSplitPageInternal(GinBtree btree, Buffer origbuf,
 	GinDataPageSetDataSize(rpage, nrightitems * sizeof(PostingItem));
 
 	/* set up right bound for left page */
-	bound = GinDataPageGetRightBound(lpage);
-	*bound = GinDataPageGetPostingItem(lpage, nleftitems)->key;
+	bound = &GinDataPageGetPostingItem(lpage, nleftitems)->key;
+	GinDataPageSetRightBoundFromItemPointer(lpage, bound);
 
 	/* set up right bound for right page */
-	*GinDataPageGetRightBound(rpage) = oldbound;
+	GinDataPageSetRightBoundFromItemPointer(rpage, &oldbound);
 
 	/* return temp pages to caller */
 	*newlpage = lpage;
@@ -1326,7 +1330,7 @@ dataPrepareDownlink(GinBtree btree, Buffer lbuf)
 	Page		lpage = BufferGetPage(lbuf);
 
 	PostingItemSetBlockNumber(pitem, BufferGetBlockNumber(lbuf));
-	pitem->key = *GinDataPageGetRightBound(lpage);
+	GinDataPageGetRightBoundToItemPointer(lpage, &pitem->key);
 
 	return pitem;
 }
@@ -1341,11 +1345,11 @@ ginDataFillRoot(GinBtree btree, Page root, BlockNumber lblkno, Page lpage, Block
 	PostingItem li,
 				ri;
 
-	li.key = *GinDataPageGetRightBound(lpage);
+	GinDataPageGetRightBoundToItemPointer(lpage, &li.key);
 	PostingItemSetBlockNumber(&li, lblkno);
 	GinDataPageAddPostingItem(root, &li, InvalidOffsetNumber);
 
-	ri.key = *GinDataPageGetRightBound(rpage);
+	GinDataPageGetRightBoundToItemPointer(rpage, &ri.key);
 	PostingItemSetBlockNumber(&ri, rblkno);
 	GinDataPageAddPostingItem(root, &ri, InvalidOffsetNumber);
 }
@@ -1405,8 +1409,9 @@ disassembleLeaf(Page page)
 
 		seginfo->action = GIN_SEGMENT_REPLACE;
 		seginfo->seg = NULL;
-		seginfo->items = palloc(nuncompressed * sizeof(ItemPointerData));
-		memcpy(seginfo->items, uncompressed, nuncompressed * sizeof(ItemPointerData));
+
+		seginfo->items = palloc(nuncompressed * sizeof(GinPointerData));
+		itemPointersToGinPointers(uncompressed, seginfo->items, nuncompressed);
 		seginfo->nitems = nuncompressed;
 
 		dlist_push_tail(&leaf->segments, &seginfo->node);
@@ -1427,10 +1432,10 @@ disassembleLeaf(Page page)
  * duplicates of existing items on the page.
  */
 static bool
-addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
+addItemsToLeaf(disassembledLeaf *leaf, GinPointer newItems, int nNewItems)
 {
 	dlist_iter	iter;
-	ItemPointer nextnew = newItems;
+	GinPointer	nextnew = newItems;
 	int			newleft = nNewItems;
 	bool		modified = false;
 	leafSegmentInfo *newseg;
@@ -1454,7 +1459,7 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
 	{
 		leafSegmentInfo *cur = (leafSegmentInfo *) dlist_container(leafSegmentInfo, node, iter.cur);
 		int			nthis;
-		ItemPointer tmpitems;
+		GinPointer	tmpitems;
 		int			ntmpitems;
 
 		/*
@@ -1465,7 +1470,7 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
 		else
 		{
 			leafSegmentInfo *next;
-			ItemPointerData next_first;
+			GinPointerData next_first;
 
 			next = (leafSegmentInfo *) dlist_container(leafSegmentInfo, node,
 													   dlist_next_node(&leaf->segments, iter.cur));
@@ -1474,11 +1479,11 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
 			else
 			{
 				Assert(next->seg != NULL);
-				next_first = next->seg->first;
+				ItemPointerToGinPointer(&next->seg->first, &next_first);
 			}
 
 			nthis = 0;
-			while (nthis < newleft && ginCompareItemPointers(&nextnew[nthis], &next_first) < 0)
+			while (nthis < newleft && ginComparePointers(nextnew[nthis], next_first) < 0)
 				nthis++;
 		}
 		if (nthis == 0)
@@ -1486,7 +1491,7 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
 
 		/* Merge the new items with the existing items. */
 		if (!cur->items)
-			cur->items = ginPostingListDecode(cur->seg, &cur->nitems);
+			cur->items = ginPostingListDecodeToGinPointers(cur->seg, &cur->nitems);
 
 		/*
 		 * Fast path for the important special case that we're appending to
@@ -1494,7 +1499,7 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
 		 * larger than the target, create a new segment before that happens.
 		 */
 		if (!dlist_has_next(&leaf->segments, iter.cur) &&
-			ginCompareItemPointers(&cur->items[cur->nitems - 1], &nextnew[0]) < 0 &&
+			ginComparePointers(cur->items[cur->nitems - 1], nextnew[0]) < 0 &&
 			cur->seg != NULL &&
 			SizeOfGinPostingList(cur->seg) >= GinPostingListSegmentTargetSize)
 		{
@@ -1508,7 +1513,7 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
 			break;
 		}
 
-		tmpitems = ginMergeItemPointers(cur->items, cur->nitems,
+		tmpitems = ginMergeGinPointers(cur->items, cur->nitems,
 										nextnew, nthis,
 										&ntmpitems);
 		if (ntmpitems != cur->nitems)
@@ -1554,7 +1559,7 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
  * Returns true if the page has to be split.
  */
 static bool
-leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
+leafRepackItems(disassembledLeaf *leaf, GinPointer remaining)
 {
 	int			pgused = 0;
 	bool		needsplit = false;
@@ -1566,7 +1571,7 @@ leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
 	dlist_node *cur_node;
 	dlist_node *next_node;
 
-	ItemPointerSetInvalid(remaining);
+	GinPointerSetInvalid(remaining);
 
 	/*
 	 * cannot use dlist_foreach_modify here because we insert adjacent items
@@ -1635,13 +1640,13 @@ leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
 				nextseg = dlist_container(leafSegmentInfo, node, next_node);
 
 				if (seginfo->items == NULL)
-					seginfo->items = ginPostingListDecode(seginfo->seg,
-														  &seginfo->nitems);
+					seginfo->items = ginPostingListDecodeToGinPointers(seginfo->seg,
+																	   &seginfo->nitems);
 				if (nextseg->items == NULL)
-					nextseg->items = ginPostingListDecode(nextseg->seg,
-														  &nextseg->nitems);
+					nextseg->items = ginPostingListDecodeToGinPointers(nextseg->seg,
+																	   &nextseg->nitems);
 				nextseg->items =
-					ginMergeItemPointers(seginfo->items, seginfo->nitems,
+					ginMergeGinPointers(seginfo->items, seginfo->nitems,
 										 nextseg->items, nextseg->nitems,
 										 &nmerged);
 				Assert(nmerged == seginfo->nitems + nextseg->nitems);
@@ -1693,7 +1698,7 @@ leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
 				 * Filled both pages. The last segment we constructed did not
 				 * fit.
 				 */
-				*remaining = seginfo->seg->first;
+				ItemPointerToGinPointer(&seginfo->seg->first, remaining);
 
 				/*
 				 * remove all segments that did not fit from the list.
@@ -1758,7 +1763,7 @@ leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
  * items[] must be in sorted order with no duplicates.
  */
 BlockNumber
-createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
+createPostingTree(Relation index, GinPointerData *items, uint32 nitems,
 				  GinStatsData *buildStats)
 {
 	BlockNumber blkno;
@@ -1885,7 +1890,7 @@ ginPrepareDataScan(GinBtree btree, Relation index, BlockNumber rootBlkno)
  */
 void
 ginInsertItemPointers(Relation index, BlockNumber rootBlkno,
-					  ItemPointerData *items, uint32 nitem,
+					  GinPointerData *items, uint32 nitem,
 					  GinStatsData *buildStats)
 {
 	GinBtreeData btree;

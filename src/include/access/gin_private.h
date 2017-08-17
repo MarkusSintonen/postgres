@@ -114,7 +114,7 @@ extern bool gininsert(Relation index, Datum *values, bool *isnull,
 		  struct IndexInfo *indexInfo);
 extern void ginEntryInsert(GinState *ginstate,
 			   OffsetNumber attnum, Datum key, GinNullCategory category,
-			   ItemPointerData *items, uint32 nitem,
+			   GinPointerData *items, uint32 nitem,
 			   GinStatsData *buildStats);
 
 /* ginbtree.c */
@@ -169,7 +169,7 @@ typedef struct GinBtreeData
 	GinNullCategory entryCategory;
 
 	/* Search key for data tree (posting tree) */
-	ItemPointerData itemptr;
+	GinPointerData itemptr;
 } GinBtreeData;
 
 /* This represents a tuple to be inserted to entry tree. */
@@ -185,7 +185,7 @@ typedef struct
  */
 typedef struct
 {
-	ItemPointerData *items;
+	GinPointerData *items;
 	uint32		nitem;
 	uint32		curitem;
 } GinBtreeDataLeafInsertData;
@@ -209,7 +209,7 @@ extern void ginPrepareEntryScan(GinBtree btree, OffsetNumber attnum,
 					Datum key, GinNullCategory category,
 					GinState *ginstate);
 extern void ginEntryFillRoot(GinBtree btree, Page root, BlockNumber lblkno, Page lpage, BlockNumber rblkno, Page rpage);
-extern ItemPointer ginReadTuple(GinState *ginstate, OffsetNumber attnum,
+extern ItemPointer ginReadTupleToItemPointers(GinState *ginstate, OffsetNumber attnum,
 			 IndexTuple itup, int *nitems);
 extern GinPointer ginReadTupleToGinPointers(GinState *ginstate, OffsetNumber attnum,
 			 IndexTuple itup, int *nitems);
@@ -218,19 +218,19 @@ extern GinPointer ginReadTupleToGinPointers(GinState *ginstate, OffsetNumber att
 extern GinPointer GinDataLeafPageGetItems(Page page, int *nitems, GinPointerData advancePast);
 extern int	GinDataLeafPageGetItemsToTbm(Page page, TIDBitmap *tbm);
 extern BlockNumber createPostingTree(Relation index,
-				  ItemPointerData *items, uint32 nitems,
+				  GinPointerData *items, uint32 nitems,
 				  GinStatsData *buildStats);
 extern void GinDataPageAddPostingItem(Page page, PostingItem *data, OffsetNumber offset);
 extern void GinPageDeletePostingItem(Page page, OffsetNumber offset);
 extern void ginInsertItemPointers(Relation index, BlockNumber rootBlkno,
-					  ItemPointerData *items, uint32 nitem,
+					  GinPointerData *items, uint32 nitem,
 					  GinStatsData *buildStats);
 extern GinBtreeStack *ginScanBeginPostingTree(GinBtree btree, Relation index, BlockNumber rootBlkno, Snapshot snapshot);
 extern void ginDataFillRoot(GinBtree btree, Page root, BlockNumber lblkno, Page lpage, BlockNumber rblkno, Page rpage);
 extern void ginPrepareDataScan(GinBtree btree, Relation index, BlockNumber rootBlkno);
 
 /*
- * This is declared in ginvacuum.c, but is passed between ginVacuumItemPointers
+ * This is declared in ginvacuum.c, but is passed between ginVacuumGinPointers
  * and ginVacuumPostingTreeLeaf and as an opaque struct, so we need a forward
  * declaration for it.
  */
@@ -385,8 +385,8 @@ extern IndexBulkDeleteResult *ginbulkdelete(IndexVacuumInfo *info,
 			  void *callback_state);
 extern IndexBulkDeleteResult *ginvacuumcleanup(IndexVacuumInfo *info,
 				 IndexBulkDeleteResult *stats);
-extern ItemPointer ginVacuumItemPointers(GinVacuumState *gvs,
-					  ItemPointerData *items, int nitem, int *nremaining);
+extern GinPointer ginVacuumGinPointers(GinVacuumState *gvs,
+					  GinPointerData *items, int nitem, int *nremaining);
 
 /* ginvalidate.c */
 extern bool ginvalidate(Oid opclassoid);
@@ -399,7 +399,7 @@ typedef struct GinEntryAccumulator
 	GinNullCategory category;
 	OffsetNumber attnum;
 	bool		shouldSort;
-	ItemPointerData *list;
+	GinPointerData *list;
 	uint32		maxcount;		/* allocated size of list[] */
 	uint32		count;			/* current number of list[] entries */
 } GinEntryAccumulator;
@@ -416,11 +416,11 @@ typedef struct
 
 extern void ginInitBA(BuildAccumulator *accum);
 extern void ginInsertBAEntries(BuildAccumulator *accum,
-				   ItemPointer heapptr, OffsetNumber attnum,
+				   GinPointer heapptr, OffsetNumber attnum,
 				   Datum *entries, GinNullCategory *categories,
 				   int32 nentries);
 extern void ginBeginBAScan(BuildAccumulator *accum);
-extern ItemPointerData *ginGetBAEntry(BuildAccumulator *accum,
+extern GinPointerData *ginGetBAEntry(BuildAccumulator *accum,
 			  OffsetNumber *attnum, Datum *key, GinNullCategory *category,
 			  uint32 *n);
 
@@ -445,16 +445,16 @@ extern void ginInsertCleanup(GinState *ginstate, bool full_clean,
 
 /* ginpostinglist.c */
 
-extern GinPostingList *ginCompressPostingList(const ItemPointer ptrs, int nptrs,
+extern GinPostingList *ginCompressPostingList(const GinPointer ptrs, int nptrs,
 					   int maxsize, int *nwritten);
 extern int	ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int totalsize, TIDBitmap *tbm);
 
-extern ItemPointer ginPostingListDecodeAllSegments(GinPostingList *ptr, int len, int *ndecoded);
+extern ItemPointer ginPostingListDecodeAllSegmentsToItemPointers(GinPostingList *ptr, int len, int *ndecoded);
 extern GinPointer ginPostingListDecodeAllSegmentsToGinPointers(GinPostingList *ptr, int len, int *ndecoded);
-extern ItemPointer ginPostingListDecode(GinPostingList *ptr, int *ndecoded);
+extern ItemPointer ginPostingListDecodeToItemPointers(GinPostingList *ptr, int *ndecoded);
 extern GinPointer ginPostingListDecodeToGinPointers(GinPostingList *ptr, int *ndecoded);
-extern ItemPointer ginMergeItemPointers(ItemPointerData *a, uint32 na,
-					 ItemPointerData *b, uint32 nb,
+extern GinPointer ginMergeGinPointers(GinPointerData *a, uint32 na,
+					 GinPointerData *b, uint32 nb,
 					 int *nmerged);
 
 /*

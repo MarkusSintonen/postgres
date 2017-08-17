@@ -43,20 +43,23 @@ struct GinVacuumState
  * a new palloc'd array with the remaining items. The number of remaining
  * items is returned in *nremaining.
  */
-ItemPointer
-ginVacuumItemPointers(GinVacuumState *gvs, ItemPointerData *items,
+GinPointer
+ginVacuumGinPointers(GinVacuumState *gvs, GinPointerData *items,
 					  int nitem, int *nremaining)
 {
-	int			i,
-				remaining = 0;
-	ItemPointer tmpitems = NULL;
+	int				i,
+					remaining = 0;
+	GinPointer		tmpitems = NULL;
+	ItemPointerData ipd;
 
 	/*
 	 * Iterate over TIDs array
 	 */
 	for (i = 0; i < nitem; i++)
 	{
-		if (gvs->callback(items + i, gvs->callback_state))
+		GinPointerToItemPointer(items + i, &ipd);
+
+		if (gvs->callback(&ipd, gvs->callback_state))
 		{
 			gvs->result->tuples_removed += 1;
 			if (!tmpitems)
@@ -65,8 +68,8 @@ ginVacuumItemPointers(GinVacuumState *gvs, ItemPointerData *items,
 				 * First TID to be deleted: allocate memory to hold the
 				 * remaining items.
 				 */
-				tmpitems = palloc(sizeof(ItemPointerData) * nitem);
-				memcpy(tmpitems, items, sizeof(ItemPointerData) * i);
+				tmpitems = palloc(sizeof(GinPointerData) * nitem);
+				memcpy(tmpitems, items, sizeof(GinPointerData) * i);
 			}
 		}
 		else
@@ -459,28 +462,26 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 		else if (GinGetNPosting(itup) > 0)
 		{
 			int			nitems;
-			ItemPointer items_orig;
-			bool		free_items_orig;
-			ItemPointer items;
+			GinPointer	items_orig;
+			GinPointer	items;
 
 			/* Get list of item pointers from the tuple. */
 			if (GinItupIsCompressed(itup))
 			{
-				items_orig = ginPostingListDecode((GinPostingList *) GinGetPosting(itup), &nitems);
-				free_items_orig = true;
+				items_orig = ginPostingListDecodeToGinPointers((GinPostingList *) GinGetPosting(itup), &nitems);
 			}
 			else
 			{
-				items_orig = (ItemPointer) GinGetPosting(itup);
+				ItemPointer ipr = (ItemPointer) GinGetPosting(itup);
 				nitems = GinGetNPosting(itup);
-				free_items_orig = false;
+				items_orig = palloc(nitems * sizeof(GinPointer));
+				itemPointersToGinPointers(ipr, items_orig, nitems);
 			}
 
 			/* Remove any items from the list that need to be vacuumed. */
-			items = ginVacuumItemPointers(gvs, items_orig, nitems, &nitems);
+			items = ginVacuumGinPointers(gvs, items_orig, nitems, &nitems);
 
-			if (free_items_orig)
-				pfree(items_orig);
+			pfree(items_orig);
 
 			/* If any item pointers were removed, recreate the tuple. */
 			if (items)

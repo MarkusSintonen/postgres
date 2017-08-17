@@ -150,13 +150,17 @@ ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 	 */
 	if (!GinPageIsCompressed(page))
 	{
-		ItemPointer uncompressed = (ItemPointer) GinDataPageGetData(page);
 		int			nuncompressed = GinPageGetOpaque(page)->maxoff;
+		GinPointer  uncompressed = (GinPointer)palloc(nuncompressed * sizeof(GinPointerData));
 		int			npacked;
 		GinPostingList *plist;
 
+		itemPointersToGinPointers((ItemPointer)GinDataPageGetData(page), 
+								  uncompressed, nuncompressed);
+
 		plist = ginCompressPostingList(uncompressed, nuncompressed,
 									   BLCKSZ, &npacked);
+		pfree(uncompressed);
 		Assert(npacked == nuncompressed);
 
 		totalsize = SizeOfGinPostingList(plist);
@@ -179,10 +183,11 @@ ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 		GinPostingList *newseg = NULL;
 		int			newsegsize = 0;
 		ItemPointerData *items = NULL;
+		GinPointerData *gpitems = NULL;
 		uint16		nitems = 0;
-		ItemPointerData *olditems;
+		GinPointerData *olditems;
 		int			nolditems;
-		ItemPointerData *newitems;
+		GinPointerData *newitems;
 		int			nnewitems;
 		int			segsize;
 		Pointer		segptr;
@@ -222,11 +227,15 @@ ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 		{
 			int			npacked;
 
-			olditems = ginPostingListDecode(oldseg, &nolditems);
+			olditems = ginPostingListDecodeToGinPointers(oldseg, &nolditems);
 
-			newitems = ginMergeItemPointers(items, nitems,
+			gpitems = palloc(nitems * sizeof(GinPointerData));
+			itemPointersToGinPointers(items, gpitems, nitems);
+
+			newitems = ginMergeGinPointers(gpitems, nitems,
 											olditems, nolditems,
 											&nnewitems);
+			pfree(gpitems);
 			Assert(nnewitems == nolditems + nitems);
 
 			newseg = ginCompressPostingList(newitems, nnewitems,

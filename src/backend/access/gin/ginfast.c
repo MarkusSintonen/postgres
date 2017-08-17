@@ -658,7 +658,7 @@ static void
 processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 				   Page page, OffsetNumber startoff)
 {
-	ItemPointerData heapptr;
+	GinPointerData heapptr;
 	OffsetNumber i,
 				maxoff;
 	OffsetNumber attrnum;
@@ -668,7 +668,7 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 
 	maxoff = PageGetMaxOffsetNumber(page);
 	Assert(maxoff >= FirstOffsetNumber);
-	ItemPointerSetInvalid(&heapptr);
+	GinPointerSetInvalid(&heapptr);
 	attrnum = 0;
 
 	for (i = startoff; i <= maxoff; i = OffsetNumberNext(i))
@@ -681,12 +681,12 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 		/* Check for change of heap TID or attnum */
 		curattnum = gintuple_get_attrnum(accum->ginstate, itup);
 
-		if (!ItemPointerIsValid(&heapptr))
+		if (!GinPointerIsValid(&heapptr))
 		{
-			heapptr = itup->t_tid;
+			ItemPointerToGinPointer(&itup->t_tid, &heapptr);
 			attrnum = curattnum;
 		}
-		else if (!(ItemPointerEquals(&heapptr, &itup->t_tid) &&
+		else if (!(ginComparePointerWithItemPointer(heapptr, &itup->t_tid) == 0 &&
 				   curattnum == attrnum))
 		{
 			/*
@@ -697,7 +697,7 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 			ginInsertBAEntries(accum, &heapptr, attrnum,
 							   ka->keys, ka->categories, ka->nvalues);
 			ka->nvalues = 0;
-			heapptr = itup->t_tid;
+			ItemPointerToGinPointer(&itup->t_tid, &heapptr);
 			attrnum = curattnum;
 		}
 
@@ -852,7 +852,7 @@ ginInsertCleanup(GinState *ginstate, bool full_clean,
 			(GinPageHasFullRow(page) &&
 			 (accum.allocatedMemory >= workMemory * 1024L)))
 		{
-			ItemPointerData *list;
+			GinPointerData *list;
 			uint32		nlist;
 			Datum		key;
 			GinNullCategory category;
