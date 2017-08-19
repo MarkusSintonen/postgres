@@ -463,13 +463,19 @@ extern GinPointer ginMergeGinPointers(GinPointerData *a, uint32 na,
  */
 
 static inline int
-ginComparePointers(GinPointerData a, GinPointerData b)
+ginPointerCompare(GinPointerData a, GinPointerData b)
 {
 	return (a > b) - (a < b);
 }
 
+static inline bool
+ginPointerEquals(GinPointerData a, GinPointerData b)
+{
+	return a == b;
+}
+
 static inline int
-ginCompareItemPointers(ItemPointer a, ItemPointer b)
+ginItemPointerCompare(ItemPointer a, ItemPointer b)
 {
 	GinPointerData ia;
 	GinPointerData ib;
@@ -477,17 +483,17 @@ ginCompareItemPointers(ItemPointer a, ItemPointer b)
 	ItemPointerToGinPointer(a, &ia);
 	ItemPointerToGinPointer(b, &ib);
 
-	return ginComparePointers(ia, ib);
+	return ginPointerCompare(ia, ib);
 }
 
 static inline int
-ginComparePointerWithItemPointer(GinPointerData gp, ItemPointer ip)
+ginPointerWithItemPointerCompare(GinPointerData a, ItemPointer b)
 {
 	GinPointerData ib;
 
-	ItemPointerToGinPointer(ip, &ib);
+	ItemPointerToGinPointer(b, &ib);
 	
-	return ginComparePointers(gp, ib);
+	return ginPointerCompare(a, ib);
 }
 
 extern int	ginTraverseLock(Buffer buffer, bool searchMode);

@@ -56,7 +56,7 @@ ginCombineData(RBNode *existing, const RBNode *newdata, void *arg)
 	{
 		int			res;
 
-		res = ginComparePointers(*(eo->list + eo->count - 1), *(en->list));
+		res = ginPointerCompare(*(eo->list + eo->count - 1), *(en->list));
 		Assert(res != 0);
 
 		if (res > 0)
@@ -244,7 +244,7 @@ ginInsertBAEntries(BuildAccumulator *accum,
 static int
 qsortCompareGinPointers(const void *a, const void *b)
 {
-	int			res = ginComparePointers(*(GinPointer) a, *(GinPointer) b);
+	int			res = ginPointerCompare(*(GinPointer) a, *(GinPointer) b);
 
 	/* Assert that there are no equal item pointers being sorted */
 	Assert(res != 0);

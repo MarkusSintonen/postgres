@@ -346,7 +346,7 @@ ginPostingListDecodeAllSegmentsToItemPointers(GinPostingList *segment, int len, 
 
 		/* copy the first item */
 		Assert(OffsetNumberIsValid(ItemPointerGetOffsetNumber(&segment->first)));
-		Assert(ndecoded == 0 || ginCompareItemPointers(&segment->first, &result[ndecoded - 1]) > 0);
+		Assert(ndecoded == 0 || ginItemPointerCompare(&segment->first, &result[ndecoded - 1]) > 0);
 		result[ndecoded] = segment->first;
 		ndecoded++;
 
@@ -412,7 +412,7 @@ ginPostingListDecodeAllSegmentsToGinPointers(GinPostingList *segment, int len, i
 
 		/* copy the first item */
 		Assert(OffsetNumberIsValid(GinPointerGetOffsetNumber(&item)));
-		Assert(ndecoded == 0 || ginComparePointers(item, result[ndecoded - 1]) > 0);
+		Assert(ndecoded == 0 || ginPointerCompare(item, result[ndecoded - 1]) > 0);
 		result[ndecoded] = item;
 		ndecoded++;
 
@@ -477,13 +477,13 @@ ginMergeGinPointers(GinPointerData *a, uint32 na,
 	 * If the argument arrays don't overlap, we can just append them to each
 	 * other.
 	 */
-	if (na == 0 || nb == 0 || ginComparePointers(a[na - 1], b[0]) < 0)
+	if (na == 0 || nb == 0 || ginPointerCompare(a[na - 1], b[0]) < 0)
 	{
 		memcpy(dst, a, na * sizeof(GinPointerData));
 		memcpy(&dst[na], b, nb * sizeof(GinPointerData));
 		*nmerged = na + nb;
 	}
-	else if (ginComparePointers(b[nb - 1], a[0]) < 0)
+	else if (ginPointerCompare(b[nb - 1], a[0]) < 0)
 	{
 		memcpy(dst, b, nb * sizeof(GinPointerData));
 		memcpy(&dst[nb], a, na * sizeof(GinPointerData));
@@ -497,7 +497,7 @@ ginMergeGinPointers(GinPointerData *a, uint32 na,
 
 		while (aptr - a < na && bptr - b < nb)
 		{
-			int			cmp = ginComparePointers(*aptr, *bptr);
+			int			cmp = ginPointerCompare(*aptr, *bptr);
 
 			if (cmp > 0)
 				*dptr++ = *bptr++;

@@ -689,7 +689,7 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 			heapptr = t_tid;
 			attrnum = curattnum;
 		}
-		else if (!(ginComparePointers(heapptr, t_tid) == 0 &&
+		else if (!(ginPointerEquals(heapptr, t_tid) &&
 				   curattnum == attrnum))
 		{
 			/*

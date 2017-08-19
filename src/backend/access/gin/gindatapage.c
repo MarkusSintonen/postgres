@@ -147,7 +147,7 @@ GinDataLeafPageGetItems(Page page, int *nitems, GinPointerData advancePast)
 		{
 			next = GinNextPostingListSegment(seg);
 			while ((Pointer) next < endptr &&
-				   ginComparePointerWithItemPointer(advancePast, &next->first) > 0)
+				   ginPointerWithItemPointerCompare(advancePast, &next->first) > 0)
 			{
 				seg = next;
 				next = GinNextPostingListSegment(seg);
@@ -239,7 +239,7 @@ dataIsMoveRight(GinBtree btree, Page page)
 
 	GinDataPageGetRightBoundToGinPointer(page, &gptr);
 
-	return (ginComparePointers(btree->itemptr, gptr) > 0) ? TRUE : FALSE;
+	return (ginPointerCompare(btree->itemptr, gptr) > 0) ? TRUE : FALSE;
 }
 
 /*
@@ -289,7 +289,7 @@ dataLocateItem(GinBtree btree, GinBtreeStack *stack)
 		else
 		{
 			pitem = GinDataPageGetPostingItem(page, mid);
-			result = ginComparePointerWithItemPointer(btree->itemptr, &(pitem->key));
+			result = ginPointerWithItemPointerCompare(btree->itemptr, &(pitem->key));
 		}
 
 		if (result == 0)
@@ -473,7 +473,7 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	{
 		for (i = 0; i < maxitems; i++)
 		{
-			if (ginComparePointers(newItems[i], rbound) > 0)
+			if (ginPointerCompare(newItems[i], rbound) > 0)
 			{
 				/*
 				 * This needs to go to some other location in the tree. (The
@@ -502,7 +502,7 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 			lastleftinfo->items = ginPostingListDecodeToGinPointers(lastleftinfo->seg,
 																	&lastleftinfo->nitems);
 		maxOldItem = lastleftinfo->items[lastleftinfo->nitems - 1];
-		if (ginComparePointers(newItems[0], maxOldItem) >= 0)
+		if (ginPointerCompare(newItems[0], maxOldItem) >= 0)
 			append = true;
 		else
 			append = false;
@@ -574,13 +574,13 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	 */
 	if (GinPointerIsValid(&remaining))
 	{
-		if (!append || ginComparePointers(maxOldItem, remaining) >= 0)
+		if (!append || ginPointerCompare(maxOldItem, remaining) >= 0)
 			elog(ERROR, "could not split GIN page; all old items didn't fit");
 
 		/* Count how many of the new items did fit. */
 		for (i = 0; i < maxitems; i++)
 		{
-			if (ginComparePointers(newItems[i], remaining) >= 0)
+			if (ginPointerCompare(newItems[i], remaining) >= 0)
 				break;
 		}
 		if (i == 0)
@@ -686,7 +686,7 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 								 *newlpage, *newrpage);
 
 		Assert(GinPageRightMost(page) ||
-			   ginCompareItemPointers((ItemPointer)PageGetContents(*newlpage),
+			   ginItemPointerCompare((ItemPointer)PageGetContents(*newlpage),
 									  (ItemPointer)PageGetContents(*newrpage)) < 0);
 
 		if (append) 
@@ -1483,7 +1483,7 @@ addItemsToLeaf(disassembledLeaf *leaf, GinPointer newItems, int nNewItems)
 			}
 
 			nthis = 0;
-			while (nthis < newleft && ginComparePointers(nextnew[nthis], next_first) < 0)
+			while (nthis < newleft && ginPointerCompare(nextnew[nthis], next_first) < 0)
 				nthis++;
 		}
 		if (nthis == 0)
@@ -1499,7 +1499,7 @@ addItemsToLeaf(disassembledLeaf *leaf, GinPointer newItems, int nNewItems)
 		 * larger than the target, create a new segment before that happens.
 		 */
 		if (!dlist_has_next(&leaf->segments, iter.cur) &&
-			ginComparePointers(cur->items[cur->nitems - 1], nextnew[0]) < 0 &&
+			ginPointerCompare(cur->items[cur->nitems - 1], nextnew[0]) < 0 &&
 			cur->seg != NULL &&
 			SizeOfGinPostingList(cur->seg) >= GinPostingListSegmentTargetSize)
 		{
