@@ -686,10 +686,10 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 								 *newlpage, *newrpage);
 
 		Assert(GinPageRightMost(page) ||
-			   ginCompareItemPointers(GinDataPageGetRightBound(*newlpage),
-									  GinDataPageGetRightBound(*newrpage)) < 0);
+			   ginCompareItemPointers((ItemPointer)PageGetContents(*newlpage),
+									  (ItemPointer)PageGetContents(*newrpage)) < 0);
 
-		if (append)
+		if (append) 
 			elog(DEBUG2, "appended %d items to block %u; split %d/%d (%d to go)",
 				 maxitems, BufferGetBlockNumber(buf), (int) leaf->lsize, (int) leaf->rsize,
 				 items->nitem - items->curitem - maxitems);

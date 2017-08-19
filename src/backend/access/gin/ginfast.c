@@ -659,6 +659,7 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 				   Page page, OffsetNumber startoff)
 {
 	GinPointerData heapptr;
+	GinPointerData t_tid;
 	OffsetNumber i,
 				maxoff;
 	OffsetNumber attrnum;
@@ -681,12 +682,14 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 		/* Check for change of heap TID or attnum */
 		curattnum = gintuple_get_attrnum(accum->ginstate, itup);
 
+		ItemPointerToGinPointer(&itup->t_tid, &t_tid);
+
 		if (!GinPointerIsValid(&heapptr))
 		{
-			ItemPointerToGinPointer(&itup->t_tid, &heapptr);
+			heapptr = t_tid;
 			attrnum = curattnum;
 		}
-		else if (!(ginComparePointerWithItemPointer(heapptr, &itup->t_tid) == 0 &&
+		else if (!(ginComparePointers(heapptr, t_tid) == 0 &&
 				   curattnum == attrnum))
 		{
 			/*
@@ -697,7 +700,7 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 			ginInsertBAEntries(accum, &heapptr, attrnum,
 							   ka->keys, ka->categories, ka->nvalues);
 			ka->nvalues = 0;
-			ItemPointerToGinPointer(&itup->t_tid, &heapptr);
+			heapptr = t_tid;
 			attrnum = curattnum;
 		}
 

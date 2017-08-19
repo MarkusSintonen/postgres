@@ -1260,7 +1260,7 @@ scanGetItem(IndexScanDesc scan, GinPointerData advancePast,
 			}
 			else
 			{
-				Assert(GinItemPointerGetOffsetNumber(&key->curItem) > 0);
+				Assert(GinPointerGetOffsetNumber(&key->curItem) > 0);
 				GinPointerSet(&advancePast,
 							  GinPointerGetBlockNumber(&key->curItem),
 							  OffsetNumberPrev(GinPointerGetOffsetNumber(&key->curItem)));
