@@ -327,7 +327,7 @@ typedef struct GinScanEntryData
 	/* Current page in posting tree */
 	Buffer		buffer;
 
-	/* current ItemPointer to heap */
+	/* current GinPointerData to heap */
 	GinPointerData curItem;
 
 	/* for a partial-match or full-scan query, we accumulate all TIDs here */
