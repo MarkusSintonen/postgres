@@ -668,7 +668,9 @@ queue_listen(ListenActionKind action, const char *pattern, bool isSimilarToPatte
 	if (isSimilarToPattern)
 	{
 		/* convert to regex pattern */
-		datum = DirectFunctionCall1(similar_escape, CStringGetTextDatum(pattern));
+		datum = DirectFunctionCall2(similar_escape, 
+									CStringGetTextDatum(pattern), 
+									CStringGetTextDatum("\\"));
 
 		/*
 		* Regex pattern is now compiled to ensure any errors are captured at this point.
