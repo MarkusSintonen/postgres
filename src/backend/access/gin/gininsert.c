@@ -48,6 +48,7 @@ static IndexTuple
 addItemPointersToLeafTuple(GinState *ginstate,
 						   IndexTuple old,
 						   ItemPointerData *items, uint32 nitem,
+						   bool has_head,
 						   GinStatsData *buildStats)
 {
 	OffsetNumber attnum;
@@ -66,7 +67,7 @@ addItemPointersToLeafTuple(GinState *ginstate,
 	key = gintuple_get_key(ginstate, old, &category);
 
 	/* merge the old and new posting lists */
-	oldItems = ginReadTuple(ginstate, attnum, old, &oldNPosting);
+	oldItems = ginReadTuple(ginstate, attnum, old, has_head, &oldNPosting);
 
 	newItems = ginMergeItemPointers(items, nitem,
 									oldItems, oldNPosting,
@@ -219,7 +220,8 @@ ginEntryInsert(GinState *ginstate,
 
 		/* modify an existing leaf entry */
 		itup = addItemPointersToLeafTuple(ginstate, itup,
-										  items, nitem, buildStats);
+										  items, nitem, 
+										  GinPageHasExtHeader(page), buildStats);
 
 		insertdata.isDelete = TRUE;
 	}

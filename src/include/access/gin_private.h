@@ -210,7 +210,7 @@ extern void ginPrepareEntryScan(GinBtree btree, OffsetNumber attnum,
 					GinState *ginstate);
 extern void ginEntryFillRoot(GinBtree btree, Page root, BlockNumber lblkno, Page lpage, BlockNumber rblkno, Page rpage);
 extern ItemPointer ginReadTuple(GinState *ginstate, OffsetNumber attnum,
-			 IndexTuple itup, int *nitems);
+			 IndexTuple itup, bool has_head, int *nitems);
 
 /* gindatapage.c */
 extern ItemPointer GinDataLeafPageGetItems(Page page, int *nitems, ItemPointerData advancePast);
@@ -445,10 +445,11 @@ extern void ginInsertCleanup(GinState *ginstate, bool full_clean,
 
 extern GinPostingList *ginCompressPostingList(const ItemPointer ptrs, int nptrs,
 					   int maxsize, int *nwritten);
-extern int	ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int totalsize, TIDBitmap *tbm);
+extern int	ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int totalsize, bool has_head,
+				TIDBitmap *tbm);
 
-extern ItemPointer ginPostingListDecodeAllSegments(GinPostingList *ptr, int len, int *ndecoded);
-extern ItemPointer ginPostingListDecode(GinPostingList *ptr, int *ndecoded);
+extern ItemPointer ginPostingListDecodeAllSegments(GinPostingList *ptr, int len, bool has_head, int *ndecoded);
+extern ItemPointer ginPostingListDecode(GinPostingList *ptr, bool has_head, int *ndecoded);
 extern ItemPointer ginMergeItemPointers(ItemPointerData *a, uint32 na,
 					 ItemPointerData *b, uint32 nb,
 					 int *nmerged);

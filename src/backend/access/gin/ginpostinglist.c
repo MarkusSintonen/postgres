@@ -191,7 +191,7 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 
 	result = palloc(maxsize);
 
-	maxbytes = maxsize - offsetof(GinPostingList, bytes);
+	maxbytes = maxsize - offsetof(GinPostingList, bytes) - SizeOfGinPostingListHeader;
 	Assert(maxbytes > 0);
 
 	/* Store the first special item */
@@ -199,8 +199,8 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 
 	prev = itemptr_to_uint64(&result->first);
 
-	ptr = result->bytes;
-	endptr = result->bytes + maxbytes;
+	ptr = result->bytes + SizeOfGinPostingListHeader;
+	endptr = ptr + maxbytes;
 	for (totalpacked = 1; totalpacked < nipd; totalpacked++)
 	{
 		uint64		val = itemptr_to_uint64(&ipd[totalpacked]);
@@ -231,6 +231,11 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 	result->nbytes = ptr - result->bytes;
 
 	/*
+	* Set the number of items to header part
+	*/
+	*(uint32 *)result->bytes = totalpacked;
+
+	/*
 	 * If we wrote an odd number of bytes, zero out the padding byte at the
 	 * end.
 	 */
@@ -248,7 +253,7 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 #if defined (CHECK_ENCODING_ROUNDTRIP)
 	{
 		int			ndecoded;
-		ItemPointer tmp = ginPostingListDecode(result, &ndecoded);
+		ItemPointer tmp = ginPostingListDecode(result, true, &ndecoded);
 		int			i;
 
 		Assert(ndecoded == totalpacked);
@@ -266,10 +271,11 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
  * The number of items is returned in *ndecoded.
  */
 ItemPointer
-ginPostingListDecode(GinPostingList *plist, int *ndecoded)
+ginPostingListDecode(GinPostingList *plist, bool has_head, int *ndecoded)
 {
 	return ginPostingListDecodeAllSegments(plist,
 										   SizeOfGinPostingList(plist),
+										   has_head,
 										   ndecoded);
 }
 
@@ -279,27 +285,45 @@ ginPostingListDecode(GinPostingList *plist, int *ndecoded)
  * one after each other, with total size 'len' bytes.
  */
 ItemPointer
-ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_out)
+ginPostingListDecodeAllSegments(GinPostingList *segment, int len, bool has_head,
+								int *ndecoded_out)
 {
-	ItemPointer result;
-	int			nallocated;
-	uint64		val;
-	char	   *endseg = ((char *) segment) + len;
-	int			ndecoded;
-	unsigned char *ptr;
-	unsigned char *endptr;
+	GinPostingList	*orig_segment = segment;
+	ItemPointer		result;
+	uint32			nallocated = 0;
+	uint64			val;
+	char			*endseg = ((char *) segment) + len;
+	int				ndecoded;
+	unsigned char	*ptr;
+	unsigned char	*endptr;
 
-	/*
-	 * Guess an initial size of the array.
-	 */
-	nallocated = segment->nbytes * 2 + 1;
+	if (has_head)
+	{
+		/*
+		* Calculate number of encoded items from segments
+		*/
+		while ((char *)segment < endseg)
+		{
+			nallocated += *(uint32 *)segment->bytes;
+			segment = GinNextPostingListSegment(segment);
+		}
+		segment = orig_segment;
+	}
+	else
+	{
+		/*
+		* Guess an initial size of the array.
+		*/
+		nallocated = segment->nbytes * 2 + 1;
+	}
+
 	result = palloc(nallocated * sizeof(ItemPointerData));
 
 	ndecoded = 0;
 	while ((char *) segment < endseg)
 	{
 		/* enlarge output array if needed */
-		if (ndecoded >= nallocated)
+		if (!has_head && ndecoded >= nallocated)
 		{
 			nallocated *= 2;
 			result = repalloc(result, nallocated * sizeof(ItemPointerData));
@@ -317,7 +341,7 @@ ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_
 		while (ptr < endptr)
 		{
 			/* enlarge output array if needed */
-			if (ndecoded >= nallocated)
+			if (!has_head && ndecoded >= nallocated)
 			{
 				nallocated *= 2;
 				result = repalloc(result, nallocated * sizeof(ItemPointerData));
@@ -340,13 +364,13 @@ ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_
  * Add all item pointers from a bunch of posting lists to a TIDBitmap.
  */
 int
-ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int len,
+ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int len, bool has_head,
 									 TIDBitmap *tbm)
 {
 	int			ndecoded;
 	ItemPointer items;
 
-	items = ginPostingListDecodeAllSegments(ptr, len, &ndecoded);
+	items = ginPostingListDecodeAllSegments(ptr, len, has_head, &ndecoded);
 	tbm_add_tuples(tbm, items, ndecoded, false);
 	pfree(items);
 

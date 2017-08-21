@@ -44,7 +44,8 @@ typedef GinPageOpaqueData *GinPageOpaque;
 #define GIN_LIST_FULLROW  (1 << 5)	/* makes sense only on GIN_LIST page */
 #define GIN_INCOMPLETE_SPLIT (1 << 6)	/* page was split, but parent not
 										 * updated */
-#define GIN_COMPRESSED	  (1 << 7)
+#define GIN_COMPRESSED (1 << 7)
+#define GIN_EXT_HEADER (1 << 8)
 
 /* Page numbers of fixed-location pages */
 #define GIN_METAPAGE_BLKNO	(0)
@@ -119,6 +120,8 @@ typedef struct GinMetaPageData
 #define GinPageSetFullRow(page)   ( GinPageGetOpaque(page)->flags |= GIN_LIST_FULLROW )
 #define GinPageIsCompressed(page)	 ( (GinPageGetOpaque(page)->flags & GIN_COMPRESSED) != 0 )
 #define GinPageSetCompressed(page)	 ( GinPageGetOpaque(page)->flags |= GIN_COMPRESSED )
+#define GinPageHasExtHeader(page)	 ( (GinPageGetOpaque(page)->flags & GIN_EXT_HEADER) != 0 )
+#define GinPageSetHasExtHeader(page) ( GinPageGetOpaque(page)->flags |= GIN_EXT_HEADER )
 
 #define GinPageIsDeleted(page) ( (GinPageGetOpaque(page)->flags & GIN_DELETED) != 0 )
 #define GinPageSetDeleted(page)    ( GinPageGetOpaque(page)->flags |= GIN_DELETED)
@@ -326,11 +329,14 @@ typedef signed char GinNullCategory;
 typedef struct
 {
 	ItemPointerData first;		/* first item in this posting list (unpacked) */
-	uint16		nbytes;			/* number of bytes that follow */
-	unsigned char bytes[FLEXIBLE_ARRAY_MEMBER]; /* varbyte encoded items */
+	uint16		nbytes;			/* number of bytes that follow. */
+	unsigned char bytes[FLEXIBLE_ARRAY_MEMBER]; /* First 4 bytes indicate number of encoded items.
+												 * Next 2 bytes are reserved.
+												 * Rest of bytes are varbyte encoded items. */
 } GinPostingList;
 
 #define SizeOfGinPostingList(plist) (offsetof(GinPostingList, bytes) + SHORTALIGN((plist)->nbytes) )
 #define GinNextPostingListSegment(cur) ((GinPostingList *) (((char *) (cur)) + SizeOfGinPostingList((cur))))
+#define SizeOfGinPostingListHeader 6
 
 #endif							/* GINBLOCK_H */

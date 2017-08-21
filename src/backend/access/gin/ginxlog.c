@@ -82,7 +82,7 @@ ginRedoCreatePTree(XLogReaderState *record)
 	buffer = XLogInitBufferForRedo(record, 0);
 	page = (Page) BufferGetPage(buffer);
 
-	GinInitBuffer(buffer, GIN_DATA | GIN_LEAF | GIN_COMPRESSED);
+	GinInitBuffer(buffer, GIN_DATA | GIN_LEAF | GIN_COMPRESSED | GIN_EXT_HEADER);
 
 	ptr = XLogRecGetData(record) + sizeof(ginxlogCreatePostingTree);
 
@@ -168,6 +168,28 @@ ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 	}
 
 	oldseg = GinDataLeafPageGetPostingList(page);
+
+	if (!GinPageHasExtHeader(page))
+	{
+		ItemPointerData	*olditems;
+		int				nolditems;
+		GinPostingList  *plist;
+		int				npacked;
+		Size			len = GinDataLeafPageGetPostingListSize(page);
+
+		olditems = ginPostingListDecodeAllSegments(oldseg, len, false, &nolditems);
+		plist = ginCompressPostingList(olditems, nolditems, BLCKSZ, &npacked);
+		Assert(npacked == nolditems);
+
+		totalsize = SizeOfGinPostingList(plist);
+
+		memcpy(GinDataLeafPageGetPostingList(page), plist, totalsize);
+		GinDataPageSetDataSize(page, totalsize);
+		GinPageSetHasExtHeader(page);
+
+		pfree(olditems);
+	}
+
 	segmentend = (Pointer) oldseg + GinDataLeafPageGetPostingListSize(page);
 	segno = 0;
 
@@ -222,7 +244,7 @@ ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 		{
 			int			npacked;
 
-			olditems = ginPostingListDecode(oldseg, &nolditems);
+			olditems = ginPostingListDecode(oldseg, true, &nolditems);
 
 			newitems = ginMergeItemPointers(items, nitems,
 											olditems, nolditems,

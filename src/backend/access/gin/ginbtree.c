@@ -510,7 +510,9 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 			 * critical section yet.)
 			 */
 			newrootpg = PageGetTempPage(newrpage);
-			GinInitPage(newrootpg, GinPageGetOpaque(newlpage)->flags & ~(GIN_LEAF | GIN_COMPRESSED), BLCKSZ);
+			GinInitPage(newrootpg, 
+						GinPageGetOpaque(newlpage)->flags & ~(GIN_LEAF | GIN_COMPRESSED | GIN_EXT_HEADER),
+						BLCKSZ);
 
 			btree->fillRoot(btree, newrootpg,
 							BufferGetBlockNumber(lbuffer), newlpage,
