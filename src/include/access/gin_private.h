@@ -190,6 +190,16 @@ typedef struct
 	uint32		curitem;
 } GinBtreeDataLeafInsertData;
 
+typedef struct GinPostingListDecoder
+{
+	/* contains decoded items or nulls if not yet decoded at slot */
+	Page page;
+	Size segmentByteOffset;
+	Size segmentsByteLen;
+	int numItems;
+	ItemPointerData list[FLEXIBLE_ARRAY_MEMBER];
+} GinPostingListDecoder;
+
 /*
  * For internal data (posting tree) pages, the insertion payload is a
  * PostingItem
@@ -210,11 +220,9 @@ extern void ginPrepareEntryScan(GinBtree btree, OffsetNumber attnum,
 					GinState *ginstate);
 extern void ginEntryFillRoot(GinBtree btree, Page root, BlockNumber lblkno, Page lpage, BlockNumber rblkno, Page rpage);
 extern ItemPointer ginReadTuple(GinState *ginstate, OffsetNumber attnum,
-			 IndexTuple itup, bool has_head, int *nitems);
+			 IndexTuple itup, int *nitems);
 
 /* gindatapage.c */
-extern ItemPointer GinDataLeafPageGetItems(Page page, int *nitems, ItemPointerData advancePast);
-extern int	GinDataLeafPageGetItemsToTbm(Page page, TIDBitmap *tbm);
 extern BlockNumber createPostingTree(Relation index,
 				  ItemPointerData *items, uint32 nitems,
 				  GinStatsData *buildStats);
@@ -334,7 +342,7 @@ typedef struct GinScanEntryData
 	TBMIterateResult *matchResult;
 
 	/* used for Posting list and one page in Posting tree */
-	ItemPointerData *list;
+	GinPostingListDecoder *decoder;
 	int			nlist;
 	OffsetNumber offset;
 
@@ -445,14 +453,31 @@ extern void ginInsertCleanup(GinState *ginstate, bool full_clean,
 
 extern GinPostingList *ginCompressPostingList(const ItemPointer ptrs, int nptrs,
 					   int maxsize, int *nwritten);
-extern int	ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int totalsize, bool has_head,
-				TIDBitmap *tbm);
+extern int ginPostingListDecodeAllSegmentsToTbm(Page page, TIDBitmap *tbm);
 
-extern ItemPointer ginPostingListDecodeAllSegments(GinPostingList *ptr, int len, bool has_head, int *ndecoded);
-extern ItemPointer ginPostingListDecode(GinPostingList *ptr, bool has_head, int *ndecoded);
+extern GinPostingListDecoder *ginInitPostingListDecoder(Page page, ItemPointer advancePast, int *nitems_out);
+extern GinPostingListDecoder *ginInitPostingListDecoderFromTuple(Page page, IndexTuple itup, int *nitems_out);
+extern void internalGinDecodeItem(GinPostingListDecoder *decoder, int index);
+extern ItemPointer ginDecodeAllItems(GinPostingListDecoder *decoder, int *nitems_out);
+extern ItemPointer ginPostingListDecode(GinPostingList *plist, int *nitems_out);
 extern ItemPointer ginMergeItemPointers(ItemPointerData *a, uint32 na,
 					 ItemPointerData *b, uint32 nb,
 					 int *nmerged);
+
+static inline ItemPointerData
+ginDecodeItem(GinPostingListDecoder *decoder, int index)
+{
+	Assert(index < decoder->numItems);
+
+	if (!ItemPointerIsValid(&decoder->list[index]))
+	{
+		internalGinDecodeItem(decoder, index);
+	}
+
+	Assert(ItemPointerIsValid(&decoder->list[index]));
+
+	return decoder->list[index];
+}
 
 /*
  * Merging the results of several gin scans compares item pointers a lot,

@@ -467,7 +467,6 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 			if (GinItupIsCompressed(itup))
 			{
 				items_orig = ginPostingListDecode((GinPostingList *) GinGetPosting(itup), 
-												  GinPageHasExtHeader(tmppage),
 												  &nitems);
 				free_items_orig = true;
 			}

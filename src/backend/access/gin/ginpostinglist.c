@@ -228,19 +228,17 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 		}
 		prev = val;
 	}
-	result->nbytes = ptr - result->bytes;
 
-	/*
-	* Set the number of items to header part
-	*/
-	*(uint32 *)result->bytes = totalpacked;
+	GinSetNumBytesInPostingList(result, ptr - result->bytes);
+	GinSetNumItemsInPostingList(result, totalpacked);
+	GinSetHasExtHeaderInPostingList(result);
 
 	/*
 	 * If we wrote an odd number of bytes, zero out the padding byte at the
 	 * end.
 	 */
-	if (result->nbytes != SHORTALIGN(result->nbytes))
-		result->bytes[result->nbytes] = 0;
+	if (GinNumBytesInPostingList(result) != SHORTALIGN(GinNumBytesInPostingList(result)))
+		result->bytes[GinNumBytesInPostingList(result)] = 0;
 
 	if (nwritten)
 		*nwritten = totalpacked;
@@ -253,7 +251,7 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 #if defined (CHECK_ENCODING_ROUNDTRIP)
 	{
 		int			ndecoded;
-		ItemPointer tmp = ginPostingListDecode(result, true, &ndecoded);
+		ItemPointer	tmp = ginPostingListDecode(result, &ndecoded);
 		int			i;
 
 		Assert(ndecoded == totalpacked);
@@ -266,64 +264,355 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 	return result;
 }
 
-/*
- * Decode a compressed posting list into an array of item pointers.
- * The number of items is returned in *ndecoded.
- */
-ItemPointer
-ginPostingListDecode(GinPostingList *plist, bool has_head, int *ndecoded)
+void
+internalGinDecodeItem(GinPostingListDecoder *decoder, int index)
 {
-	return ginPostingListDecodeAllSegments(plist,
-										   SizeOfGinPostingList(plist),
-										   has_head,
-										   ndecoded);
+	GinPostingList *segment = (GinPostingList *)(((Pointer)decoder->page) + decoder->segmentByteOffset);
+	Pointer endseg = ((Pointer)segment) + decoder->segmentsByteLen;
+	GinPostingList *prevsegment = NULL;
+	GinPostingList *foundsegment = NULL;
+	int nitems = 0;
+	int segmentStartInd = 0;
+	int ndecoded;
+	uint64 val;
+	unsigned char *ptr;
+	unsigned char *endptr;
+
+	/* Find segment with matching item at index */
+	while ((Pointer)segment < endseg)
+	{
+		nitems = GinGetNumItemsInPostingList(segment);
+
+		if ((segmentStartInd + nitems) > index)
+		{
+			foundsegment = prevsegment != NULL ? prevsegment : segment;
+			break;
+		}
+
+		segmentStartInd += nitems;
+
+		prevsegment = segment;
+		segment = GinNextPostingListSegment(segment);
+	}
+
+	Assert(foundsegment != NULL);
+	Assert(OffsetNumberIsValid(ItemPointerGetOffsetNumber(&foundsegment->first)));
+
+	decoder->list[segmentStartInd] = foundsegment->first;
+	ndecoded = 1;
+
+	val = itemptr_to_uint64(&foundsegment->first);
+	ptr = foundsegment->bytes + SizeOfGinPostingListHeader;
+	endptr = foundsegment->bytes + GinNumBytesInPostingList(foundsegment);
+	while (ptr < endptr)
+	{
+		val += decode_varbyte(&ptr);
+
+		uint64_to_itemptr(val, &decoder->list[segmentStartInd + ndecoded]);
+		ndecoded++;
+	}
+
+	Assert(ndecoded == nitems);
 }
 
 /*
- * Decode multiple posting list segments into an array of item pointers.
- * The number of items is returned in *ndecoded_out. The segments are stored
- * one after each other, with total size 'len' bytes.
- */
-ItemPointer
-ginPostingListDecodeAllSegments(GinPostingList *segment, int len, bool has_head,
-								int *ndecoded_out)
+* Decode a compressed posting list into an array of item pointers.
+* The number of items is returned in *nitems_out.
+*/
+ItemPointer 
+ginDecodeAllItems(GinPostingListDecoder *decoder, int *nitems_out)
 {
-	GinPostingList	*orig_segment = segment;
+	int i;
+	ItemPointer items = palloc(decoder->numItems * sizeof(ItemPointerData));
+
+	for (i = 0; i < decoder->numItems; ++i)
+		items[i] = ginDecodeItem(decoder, i);
+
+	if (nitems_out)
+		*nitems_out = decoder->numItems;
+
+	return items;
+}
+
+/*
+* Read TIDs from leaf data page to single uncompressed array. The TIDs are
+* returned in ascending order.
+*
+* advancePast is a hint, indicating that the caller is only interested in
+* TIDs > advancePast. To return all items, use ItemPointerSetMin.
+*
+* Note: This function can still return items smaller than advancePast that
+* are in the same posting list as the items of interest, so the caller must
+* still check all the returned items. But passing it allows this function to
+* skip whole posting lists.
+*/
+GinPostingListDecoder*
+ginInitPostingListDecoder(Page page, ItemPointer advancePast, int *nitems_out)
+{
+	GinPostingListDecoder *result;
+	GinPostingList	*next;
+	GinPostingList	*segment;
+	GinPostingList	*origsegment;
+	Size			len;
+	Size			offset = 0;
+	Pointer			endseg;
+	int				nitems = 0;
+	bool			hasheader;
+
+	if (GinPageIsCompressed(page))
+	{
+		segment = GinDataLeafPageGetPostingList(page);
+		endseg = ((Pointer)segment) + GinDataLeafPageGetPostingListSize(page);
+
+		/* Skip to the segment containing advancePast+1 */
+		if (ItemPointerIsValid(advancePast))
+		{
+			next = GinNextPostingListSegment(segment);
+			while ((Pointer)next < endseg &&
+				ginCompareItemPointers(&next->first, advancePast) <= 0)
+			{
+				segment = next;
+				next = GinNextPostingListSegment(segment);
+			}
+		}
+
+		len = endseg - (Pointer)segment;
+		offset = (Pointer)segment - (Pointer)page;
+
+		if (len > 0)
+		{
+			if (GinHasExtHeaderInPostingList(segment))
+			{
+				hasheader = true;
+				origsegment = segment;
+
+				/*
+				* Calculate number of encoded items from segments.
+				* We do the actual decoding later on-demand.
+				*/
+				while ((Pointer)segment < endseg)
+				{
+					nitems += GinGetNumItemsInPostingList(segment);
+					segment = GinNextPostingListSegment(segment);
+
+					if (!GinHasExtHeaderInPostingList(segment))
+					{
+						hasheader = false;
+						segment = origsegment;
+						break;
+					}
+				}
+
+				if (hasheader)
+				{
+					result = palloc0(offsetof(GinPostingListDecoder, list)
+									 + sizeof(ItemPointerData) * nitems);
+				}
+			}
+			else
+			{
+				hasheader = false;
+			}
+
+			if (!hasheader)
+			{
+				uint64		  val;
+				unsigned char *ptr;
+				unsigned char *endptr;
+				uint32		  nallocated;
+				ItemPointer	  items;
+
+				nitems = 0;
+
+				/*
+				* Guess an initial size of the array.
+				*/
+				nallocated = GinNumBytesInPostingList(segment) * 2 + 1;
+				items = palloc(nallocated * sizeof(ItemPointerData));
+
+				/*
+				* We have to decode everything since we have no prior
+				* knowledge about the number of encoded items.
+				*/
+
+				while ((Pointer)segment < endseg)
+				{
+					/* enlarge output array if needed */
+					if (nitems >= nallocated)
+					{
+						nallocated *= 2;
+						items = repalloc(items, nallocated * sizeof(ItemPointerData));
+					}
+
+					/* copy the first item */
+					Assert(OffsetNumberIsValid(ItemPointerGetOffsetNumber(&segment->first)));
+					Assert(nitems == 0 || ginCompareItemPointers(&segment->first, &items[nitems - 1]) > 0);
+					items[nitems] = segment->first;
+					nitems++;
+
+					val = itemptr_to_uint64(&segment->first);
+					ptr = segment->bytes;
+					endptr = segment->bytes + GinNumBytesInPostingList(segment);
+					while (ptr < endptr)
+					{
+						/* enlarge output array if needed */
+						if (nitems >= nallocated)
+						{
+							nallocated *= 2;
+							items = repalloc(items, nallocated * sizeof(ItemPointerData));
+						}
+
+						val += decode_varbyte(&ptr);
+
+						uint64_to_itemptr(val, &items[nitems]);
+						nitems++;
+					}
+					segment = GinNextPostingListSegment(segment);
+				}
+
+				result = palloc(offsetof(GinPostingListDecoder, list)
+								+ sizeof(ItemPointerData) * nitems);
+
+				memcpy(result->list, items, nitems * sizeof(ItemPointerData));
+
+				pfree(items);
+			}
+		}
+		else
+		{
+			result = palloc(offsetof(GinPostingListDecoder, list));
+		}
+
+		result->page = page;
+		result->segmentByteOffset = offset;
+		result->segmentsByteLen = len;
+		result->numItems = nitems;
+	}
+	else
+	{
+		/*
+		* In the old pre-9.4 page format, the whole page content is used for
+		* uncompressed items, and the number of items is stored in 'maxoff'
+		*/
+		nitems = GinPageGetOpaque(page)->maxoff;
+
+		result = palloc(offsetof(GinPostingListDecoder, list)
+						+ sizeof(ItemPointerData) * nitems);
+
+		result->page = page;
+		result->segmentByteOffset = (Pointer)GinDataPageGetData(page) - (Pointer)page;
+		result->segmentsByteLen = nitems * sizeof(ItemPointerData);
+		result->numItems = nitems;
+		memcpy(result->list, (ItemPointer)GinDataPageGetData(page), result->segmentsByteLen);
+	}
+
+	if (nitems_out)
+		*nitems_out = nitems;
+
+	return result;
+}
+
+/*
+* Read item pointers from leaf entry tuple.
+*
+* Returns a palloc'd array of ItemPointers. The number of items is returned
+* in *nitems.
+*/
+GinPostingListDecoder*
+ginInitPostingListDecoderFromTuple(Page page, IndexTuple itup, int *nitems_out)
+{
+	Pointer			ptr = GinGetPosting(itup);
+	int				nitems = GinGetNPosting(itup);
+	GinPostingListDecoder *result;
+
+	result = palloc0(offsetof(GinPostingListDecoder, list)
+					 + sizeof(ItemPointerData) * nitems);
+
+	if (!GinItupIsCompressed(itup) && nitems > 0)
+	{
+		memcpy(result->list, ptr, sizeof(ItemPointerData) * nitems);
+	}
+
+	result->page = page;
+	result->segmentByteOffset = ptr - (Pointer)page;
+	result->segmentsByteLen = SizeOfGinPostingList((GinPostingList *)ptr);
+	result->numItems = nitems;
+
+	if (nitems_out)
+		*nitems_out = nitems;
+
+	return result;
+}
+
+/*
+ * Add all item pointers from a bunch of posting lists to a TIDBitmap.
+ */
+int
+ginPostingListDecodeAllSegmentsToTbm(Page page, TIDBitmap *tbm)
+{
+	int				 ndecoded;
+	ItemPointer		 items;
+	GinPostingListDecoder *decoder;
+
+	decoder = ginInitPostingListDecoder(page, NULL, &ndecoded);
+	items = ginDecodeAllItems(decoder, &ndecoded);
+	pfree(decoder);
+
+	tbm_add_tuples(tbm, items, ndecoded, false);
+	pfree(items);
+
+	return ndecoded;
+}
+
+/*
+* Decode multiple posting list segments into an array of item pointers.
+* The number of items is returned in *ndecoded_out. The segments are stored
+* one after each other, with total size 'len' bytes.
+*/
+ItemPointer
+ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_out)
+{
+	GinPostingList	*origsegment;
 	ItemPointer		result;
 	uint32			nallocated = 0;
 	uint64			val;
-	char			*endseg = ((char *) segment) + len;
+	char			*endseg = ((char *)segment) + len;
 	int				ndecoded;
+	int				headerlen;
 	unsigned char	*ptr;
 	unsigned char	*endptr;
 
-	if (has_head)
+	if (GinHasExtHeaderInPostingList(segment))
 	{
+		origsegment = segment;
+
 		/*
 		* Calculate number of encoded items from segments
 		*/
 		while ((char *)segment < endseg)
 		{
-			nallocated += *(uint32 *)segment->bytes;
+			nallocated += GinGetNumItemsInPostingList(segment);
 			segment = GinNextPostingListSegment(segment);
 		}
-		segment = orig_segment;
+		segment = origsegment;
+		headerlen = SizeOfGinPostingListHeader;
 	}
 	else
 	{
 		/*
 		* Guess an initial size of the array.
 		*/
-		nallocated = segment->nbytes * 2 + 1;
+		nallocated = GinNumBytesInPostingList(segment) * 2 + 1;
+		headerlen = 0;
 	}
 
 	result = palloc(nallocated * sizeof(ItemPointerData));
 
 	ndecoded = 0;
-	while ((char *) segment < endseg)
+	while ((char *)segment < endseg)
 	{
 		/* enlarge output array if needed */
-		if (!has_head && ndecoded >= nallocated)
+		if (ndecoded >= nallocated)
 		{
 			nallocated *= 2;
 			result = repalloc(result, nallocated * sizeof(ItemPointerData));
@@ -336,12 +625,12 @@ ginPostingListDecodeAllSegments(GinPostingList *segment, int len, bool has_head,
 		ndecoded++;
 
 		val = itemptr_to_uint64(&segment->first);
-		ptr = segment->bytes;
-		endptr = segment->bytes + segment->nbytes;
+		ptr = segment->bytes + headerlen;
+		endptr = segment->bytes + GinNumBytesInPostingList(segment);
 		while (ptr < endptr)
 		{
 			/* enlarge output array if needed */
-			if (!has_head && ndecoded >= nallocated)
+			if (ndecoded >= nallocated)
 			{
 				nallocated *= 2;
 				result = repalloc(result, nallocated * sizeof(ItemPointerData));
@@ -361,20 +650,15 @@ ginPostingListDecodeAllSegments(GinPostingList *segment, int len, bool has_head,
 }
 
 /*
- * Add all item pointers from a bunch of posting lists to a TIDBitmap.
- */
-int
-ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int len, bool has_head,
-									 TIDBitmap *tbm)
+* Decode a compressed posting list into an array of item pointers.
+* The number of items is returned in *ndecoded.
+*/
+ItemPointer
+ginPostingListDecode(GinPostingList *plist, int *ndecoded)
 {
-	int			ndecoded;
-	ItemPointer items;
-
-	items = ginPostingListDecodeAllSegments(ptr, len, has_head, &ndecoded);
-	tbm_add_tuples(tbm, items, ndecoded, false);
-	pfree(items);
-
-	return ndecoded;
+	return ginPostingListDecodeAllSegments(plist,
+		SizeOfGinPostingList(plist),
+		ndecoded);
 }
 
 /*

@@ -85,7 +85,7 @@ scanPostingTree(Relation index, GinScanEntry scanEntry,
 		page = BufferGetPage(buffer);
 		if ((GinPageGetOpaque(page)->flags & GIN_DELETED) == 0)
 		{
-			int			n = GinDataLeafPageGetItemsToTbm(page, scanEntry->matchBitmap);
+			int			n = ginPostingListDecodeAllSegmentsToTbm(page, scanEntry->matchBitmap);
 
 			scanEntry->predictNumberResult += n;
 		}
@@ -278,7 +278,6 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 			int			nipd;
 
 			ipd = ginReadTuple(btree->ginstate, scanEntry->attnum, itup, 
-							   GinPageHasExtHeader(page), 
 							   &nipd);
 			tbm_add_tuples(scanEntry->matchBitmap, ipd, nipd, false);
 			scanEntry->predictNumberResult += GinGetNPosting(itup);
@@ -307,9 +306,9 @@ restartScanEntry:
 	entry->buffer = InvalidBuffer;
 	ItemPointerSetMin(&entry->curItem);
 	entry->offset = InvalidOffsetNumber;
-	if (entry->list)
-		pfree(entry->list);
-	entry->list = NULL;
+	if (entry->decoder)
+		pfree(entry->decoder);
+	entry->decoder = NULL;
 	entry->nlist = 0;
 	entry->matchBitmap = NULL;
 	entry->matchResult = NULL;
@@ -377,7 +376,6 @@ restartScanEntry:
 			BlockNumber rootPostingTree = GinGetPostingTree(itup);
 			GinBtreeStack *stack;
 			Page		page;
-			ItemPointerData minItem;
 
 			/*
 			 * We should unlock entry page before touching posting tree to
@@ -405,8 +403,7 @@ restartScanEntry:
 			/*
 			 * Load the first page into memory.
 			 */
-			ItemPointerSetMin(&minItem);
-			entry->list = GinDataLeafPageGetItems(page, &entry->nlist, minItem);
+			entry->decoder = ginInitPostingListDecoder(page, NULL, &entry->nlist);
 
 			entry->predictNumberResult = stack->predictNumber * entry->nlist;
 
@@ -416,9 +413,7 @@ restartScanEntry:
 		}
 		else if (GinGetNPosting(itup) > 0)
 		{
-			entry->list = ginReadTuple(ginstate, entry->attnum, itup,
-									   GinPageHasExtHeader(page),
-									   &entry->nlist);
+			entry->decoder = ginInitPostingListDecoderFromTuple(page, itup, &entry->nlist);
 			entry->predictNumberResult = entry->nlist;
 
 			entry->isFinished = FALSE;
@@ -591,9 +586,10 @@ static void
 entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 				   ItemPointerData advancePast, Snapshot snapshot)
 {
-	Page		page;
-	int			i;
-	bool		stepright;
+	Page			page;
+	int				i;
+	bool			stepright;
+	ItemPointerData ipd;
 
 	if (!BufferIsValid(entry->buffer))
 	{
@@ -652,10 +648,10 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 	for (;;)
 	{
 		entry->offset = InvalidOffsetNumber;
-		if (entry->list)
+		if (entry->decoder)
 		{
-			pfree(entry->list);
-			entry->list = NULL;
+			pfree(entry->decoder);
+			entry->decoder = NULL;
 			entry->nlist = 0;
 		}
 
@@ -704,11 +700,13 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 			continue;
 		}
 
-		entry->list = GinDataLeafPageGetItems(page, &entry->nlist, advancePast);
+		entry->decoder = ginInitPostingListDecoder(page, &advancePast, &entry->nlist);
 
 		for (i = 0; i < entry->nlist; i++)
 		{
-			if (ginCompareItemPointers(&advancePast, &entry->list[i]) < 0)
+			ipd = ginDecodeItem(entry->decoder, i);
+
+			if (ginCompareItemPointers(&advancePast, &ipd) < 0)
 			{
 				entry->offset = i;
 
@@ -855,7 +853,7 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 				break;
 			}
 
-			entry->curItem = entry->list[entry->offset++];
+			entry->curItem = ginDecodeItem(entry->decoder, entry->offset++);
 		} while (ginCompareItemPointers(&entry->curItem, &advancePast) <= 0);
 		/* XXX: shouldn't we apply the fuzzy search limit here? */
 	}
@@ -876,7 +874,7 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 				}
 			}
 
-			entry->curItem = entry->list[entry->offset++];
+			entry->curItem = ginDecodeItem(entry->decoder, entry->offset++);
 
 		} while (ginCompareItemPointers(&entry->curItem, &advancePast) <= 0 ||
 				 (entry->reduceResult == TRUE && dropItem(entry)));

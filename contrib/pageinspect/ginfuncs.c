@@ -237,7 +237,7 @@ gin_leafpage_items(PG_FUNCTION_ARGS)
 		memset(nulls, 0, sizeof(nulls));
 
 		values[0] = ItemPointerGetDatum(&cur->first);
-		values[1] = UInt16GetDatum(cur->nbytes);
+		values[1] = UInt16GetDatum(GinNumBytesInPostingList(cur));
 
 		/* build an array of decoded item pointers */
 		tids = ginPostingListDecode(cur, &ndecoded);
