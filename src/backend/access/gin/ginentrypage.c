@@ -160,7 +160,7 @@ GinFormTuple(GinState *ginstate,
  * in *nitems.
  */
 ItemPointer
-ginReadTuple(GinState *ginstate, OffsetNumber attnum, IndexTuple itup, 
+ginReadTuple(GinState *ginstate, OffsetNumber attnum, IndexTuple itup,
 			 int *nitems)
 {
 	Pointer		ptr = GinGetPosting(itup);

@@ -466,8 +466,7 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 			/* Get list of item pointers from the tuple. */
 			if (GinItupIsCompressed(itup))
 			{
-				items_orig = ginPostingListDecode((GinPostingList *) GinGetPosting(itup), 
-												  &nitems);
+				items_orig = ginPostingListDecode((GinPostingList *) GinGetPosting(itup), &nitems);
 				free_items_orig = true;
 			}
 			else

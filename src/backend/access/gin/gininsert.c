@@ -219,8 +219,7 @@ ginEntryInsert(GinState *ginstate,
 
 		/* modify an existing leaf entry */
 		itup = addItemPointersToLeafTuple(ginstate, itup,
-										  items, nitem, 
-										  buildStats);
+										  items, nitem, buildStats);
 
 		insertdata.isDelete = TRUE;
 	}

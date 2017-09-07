@@ -44,7 +44,7 @@ typedef GinPageOpaqueData *GinPageOpaque;
 #define GIN_LIST_FULLROW  (1 << 5)	/* makes sense only on GIN_LIST page */
 #define GIN_INCOMPLETE_SPLIT (1 << 6)	/* page was split, but parent not
 										 * updated */
-#define GIN_COMPRESSED (1 << 7)
+#define GIN_COMPRESSED	  (1 << 7)
 
 /* Page numbers of fixed-location pages */
 #define GIN_METAPAGE_BLKNO	(0)
