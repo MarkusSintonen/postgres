@@ -332,10 +332,10 @@ typedef struct
 												 * Rest of bytes are varbyte encoded items. */
 } GinPostingList;
 
-#define GinHasExtHeaderInPostingList(plist) ((plist)->nbytes_w_ext_head_ind & (1 << 15))
+#define GinHasExtHeaderInPostingList(plist) ((bool)((plist)->nbytes_w_ext_head_ind & (1 << 15)))
 #define GinSetHasExtHeaderInPostingList(plist) ((plist)->nbytes_w_ext_head_ind |= (1 << 15))
-#define GinNumBytesInPostingList(plist) ((plist)->nbytes_w_ext_head_ind & ~(1 << 15))
-#define GinSetNumBytesInPostingList(plist, nbytes) ((plist)->nbytes_w_ext_head_ind |= (nbytes))
+#define GinNumBytesInPostingList(plist) ((uint16)((plist)->nbytes_w_ext_head_ind & ~(1 << 15)))
+#define GinSetNumBytesInPostingList(plist, nbytes) ((plist)->nbytes_w_ext_head_ind |= (uint16)(nbytes))
 #define SizeOfGinPostingList(plist) (offsetof(GinPostingList, bytes) + SHORTALIGN(GinNumBytesInPostingList(plist)) )
 #define GinNextPostingListSegment(cur) ((GinPostingList *) (((char *) (cur)) + SizeOfGinPostingList((cur))))
 #define GinGetNumItemsInPostingList(plist) (*(uint32 *)(plist)->bytes)
