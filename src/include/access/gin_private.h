@@ -197,6 +197,7 @@ typedef struct GinPostingListDecoder
 	Size segmentByteOffset;
 	Size segmentsByteLen;
 	int numItems;
+	int numDecoded;
 	ItemPointerData list[FLEXIBLE_ARRAY_MEMBER];
 } GinPostingListDecoder;
 
@@ -458,7 +459,6 @@ extern int ginPostingListDecodeAllSegmentsToTbm(Page page, TIDBitmap *tbm);
 extern GinPostingListDecoder *ginInitPostingListDecoder(Page page, ItemPointer advancePast, int *nitems_out);
 extern GinPostingListDecoder *ginInitPostingListDecoderFromTuple(Page page, IndexTuple itup, int *nitems_out);
 extern void internalGinDecodeItem(GinPostingListDecoder *decoder, int index);
-extern ItemPointer ginDecodeAllItems(GinPostingListDecoder *decoder, int *nitems_out);
 extern ItemPointer ginPostingListDecode(GinPostingList *plist, int *nitems_out);
 extern ItemPointer ginMergeItemPointers(ItemPointerData *a, uint32 na,
 					 ItemPointerData *b, uint32 nb,
@@ -467,14 +467,10 @@ extern ItemPointer ginMergeItemPointers(ItemPointerData *a, uint32 na,
 static inline ItemPointerData
 ginDecodeItem(GinPostingListDecoder *decoder, int index)
 {
-	Assert(index < decoder->numItems);
-
 	if (!ItemPointerIsValid(&decoder->list[index]))
 	{
 		internalGinDecodeItem(decoder, index);
 	}
-
-	Assert(ItemPointerIsValid(&decoder->list[index]));
 
 	return decoder->list[index];
 }
