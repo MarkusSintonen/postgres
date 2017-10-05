@@ -106,10 +106,10 @@ ginFillScanEntry(GinScanOpaque so, OffsetNumber attnum,
 	ItemPointerSetMin(&scanEntry->curItem);
 	scanEntry->matchBitmap = NULL;
 	scanEntry->matchIterator = NULL;
+	scanEntry->matchBitmap = InvalidOffsetNumber;
 	scanEntry->matchResult = NULL;
 	scanEntry->decoder = NULL;
 	scanEntry->nlist = 0;
-	scanEntry->offset = InvalidOffsetNumber;
 	scanEntry->isFinished = false;
 	scanEntry->reduceResult = false;
 
@@ -243,7 +243,7 @@ ginFreeScanKeys(GinScanOpaque so)
 		if (entry->buffer != InvalidBuffer)
 			ReleaseBuffer(entry->buffer);
 		if (entry->decoder)
-			pfree(entry->decoder);
+			ginFreePostingListDecoder(entry->decoder);
 		if (entry->matchIterator)
 			tbm_end_iterate(entry->matchIterator);
 		if (entry->matchBitmap)

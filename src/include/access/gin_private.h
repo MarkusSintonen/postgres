@@ -192,13 +192,16 @@ typedef struct
 
 typedef struct GinPostingListDecoder
 {
-	/* contains decoded items or nulls if not yet decoded at slot */
-	Page page;
-	Size segmentByteOffset;
-	Size segmentsByteLen;
+	int index;
 	int numItems;
-	int numDecoded;
-	ItemPointerData list[FLEXIBLE_ARRAY_MEMBER];
+	ItemPointerData current;
+	uint64 decoderVal;
+	Pointer postingListPtr;
+	Pointer postingListEndPtr;
+	unsigned char *dataPtr;
+	unsigned char *dataEndPtr;
+	char *segmentData;
+	ItemPointerData *items;
 } GinPostingListDecoder;
 
 /*
@@ -341,11 +344,11 @@ typedef struct GinScanEntryData
 	TIDBitmap  *matchBitmap;
 	TBMIterator *matchIterator;
 	TBMIterateResult *matchResult;
+	OffsetNumber matchOffset;
 
 	/* used for Posting list and one page in Posting tree */
 	GinPostingListDecoder *decoder;
 	int			nlist;
-	OffsetNumber offset;
 
 	bool		isFinished;
 	bool		reduceResult;
@@ -458,21 +461,17 @@ extern int ginPostingListDecodeAllSegmentsToTbm(Page page, TIDBitmap *tbm);
 
 extern GinPostingListDecoder *ginInitPostingListDecoder(Page page, ItemPointer advancePast, int *nitems_out);
 extern GinPostingListDecoder *ginInitPostingListDecoderFromTuple(Page page, IndexTuple itup, int *nitems_out);
+extern void ginFreePostingListDecoder(GinPostingListDecoder *decoder);
+extern void ginDecoderAdvancePastItem(GinPostingListDecoder *decoder, ItemPointer advancePast);
 extern void internalGinDecodeItem(GinPostingListDecoder *decoder, int index);
 extern ItemPointer ginPostingListDecode(GinPostingList *plist, int *nitems_out);
 extern ItemPointer ginMergeItemPointers(ItemPointerData *a, uint32 na,
 					 ItemPointerData *b, uint32 nb,
 					 int *nmerged);
 
-static inline ItemPointerData
-ginDecodeItem(GinPostingListDecoder *decoder, int index)
+static inline ItemPointerData ginDecoderCurrent(GinPostingListDecoder *decoder)
 {
-	if (!ItemPointerIsValid(&decoder->list[index]))
-	{
-		internalGinDecodeItem(decoder, index);
-	}
-
-	return decoder->list[index];
+	return decoder->current;
 }
 
 /*

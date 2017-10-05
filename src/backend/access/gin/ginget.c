@@ -304,9 +304,9 @@ startScanEntry(GinState *ginstate, GinScanEntry entry, Snapshot snapshot)
 restartScanEntry:
 	entry->buffer = InvalidBuffer;
 	ItemPointerSetMin(&entry->curItem);
-	entry->offset = InvalidOffsetNumber;
+	entry->matchOffset = InvalidOffsetNumber;
 	if (entry->decoder)
-		pfree(entry->decoder);
+		ginFreePostingListDecoder(entry->decoder);
 	entry->decoder = NULL;
 	entry->nlist = 0;
 	entry->matchBitmap = NULL;
@@ -586,7 +586,6 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 				   ItemPointerData advancePast, Snapshot snapshot)
 {
 	Page			page;
-	int				i;
 	bool			stepright;
 	ItemPointerData ipd;
 
@@ -646,10 +645,9 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 	page = BufferGetPage(entry->buffer);
 	for (;;)
 	{
-		entry->offset = InvalidOffsetNumber;
 		if (entry->decoder)
 		{
-			pfree(entry->decoder);
+			ginFreePostingListDecoder(entry->decoder);
 			entry->decoder = NULL;
 			entry->nlist = 0;
 		}
@@ -701,24 +699,20 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 
 		entry->decoder = ginInitPostingListDecoder(page, &advancePast, &entry->nlist);
 
-		for (i = 0; i < entry->nlist; i++)
+		ginDecoderAdvancePastItem(entry->decoder, &advancePast);
+		ipd = ginDecoderCurrent(entry->decoder);
+
+		if (ItemPointerIsValid(&ipd))
 		{
-			ipd = ginDecodeItem(entry->decoder, i);
-
-			if (ginCompareItemPointers(&advancePast, &ipd) < 0)
+			if (GinPageRightMost(page))
 			{
-				entry->offset = i;
-
-				if (GinPageRightMost(page))
-				{
-					/* after processing the copied items, we're done. */
-					UnlockReleaseBuffer(entry->buffer);
-					entry->buffer = InvalidBuffer;
-				}
-				else
-					LockBuffer(entry->buffer, GIN_UNLOCK);
-				return;
+				/* after processing the copied items, we're done. */
+				UnlockReleaseBuffer(entry->buffer);
+				entry->buffer = InvalidBuffer;
 			}
+			else
+				LockBuffer(entry->buffer, GIN_UNLOCK);
+			return;
 		}
 	}
 }
@@ -763,7 +757,7 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 			 */
 			while (entry->matchResult == NULL ||
 				   (entry->matchResult->ntuples >= 0 &&
-					entry->offset >= entry->matchResult->ntuples) ||
+					entry->matchOffset >= entry->matchResult->ntuples) ||
 				   entry->matchResult->blockno < advancePastBlk ||
 				   (ItemPointerIsLossyPage(&advancePast) &&
 					entry->matchResult->blockno == advancePastBlk))
@@ -785,7 +779,7 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 				 * matchResult is lossy.  So, on next call we will get next
 				 * result from TIDBitmap.
 				 */
-				entry->offset = 0;
+				entry->matchOffset = 0;
 			}
 			if (entry->isFinished)
 				break;
@@ -821,48 +815,58 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 				 */
 				if (entry->matchResult->offsets[entry->matchResult->ntuples - 1] <= advancePastOff)
 				{
-					entry->offset = entry->matchResult->ntuples;
+					entry->matchOffset = entry->matchResult->ntuples;
 					continue;
 				}
 
 				/* Otherwise scan to find the first item > advancePast */
-				while (entry->matchResult->offsets[entry->offset] <= advancePastOff)
-					entry->offset++;
+				while (entry->matchResult->offsets[entry->matchOffset] <= advancePastOff)
+					entry->matchOffset++;
 			}
 
 			ItemPointerSet(&entry->curItem,
 						   entry->matchResult->blockno,
-						   entry->matchResult->offsets[entry->offset]);
-			entry->offset++;
+						   entry->matchResult->offsets[entry->matchOffset]);
+			entry->matchOffset++;
 			gotitem = true;
 		} while (!gotitem || (entry->reduceResult == TRUE && dropItem(entry)));
 	}
 	else if (!BufferIsValid(entry->buffer))
 	{
+		ItemPointerData ipd;
+
 		/*
 		 * A posting list from an entry tuple, or the last page of a posting
 		 * tree.
 		 */
 		do
 		{
-			if (entry->offset >= entry->nlist)
+			ginDecoderAdvancePastItem(entry->decoder, &advancePast);
+			ipd = ginDecoderCurrent(entry->decoder);
+
+			if (!ItemPointerIsValid(&ipd))
 			{
-				ItemPointerSetInvalid(&entry->curItem);
 				entry->isFinished = TRUE;
 				break;
 			}
 
-			entry->curItem = ginDecodeItem(entry->decoder, entry->offset++);
-		} while (ginCompareItemPointers(&entry->curItem, &advancePast) <= 0);
+			entry->curItem = ipd;
+
+		} while (ginCompareItemPointers(&ipd, &advancePast) <= 0);
 		/* XXX: shouldn't we apply the fuzzy search limit here? */
 	}
 	else
 	{
+		ItemPointerData ipd;
+
 		/* A posting tree */
 		do
 		{
+			ginDecoderAdvancePastItem(entry->decoder, &advancePast);
+			ipd = ginDecoderCurrent(entry->decoder);
+
 			/* If we've processed the current batch, load more items */
-			while (entry->offset >= entry->nlist)
+			while (!ItemPointerIsValid(&ipd))
 			{
 				entryLoadMoreItems(ginstate, entry, advancePast, snapshot);
 
@@ -871,11 +875,13 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 					ItemPointerSetInvalid(&entry->curItem);
 					return;
 				}
+
+				ipd = ginDecoderCurrent(entry->decoder);
 			}
 
-			entry->curItem = ginDecodeItem(entry->decoder, entry->offset++);
+			entry->curItem = ipd;
 
-		} while (ginCompareItemPointers(&entry->curItem, &advancePast) <= 0 ||
+		} while (ginCompareItemPointers(&ipd, &advancePast) <= 0 ||
 				 (entry->reduceResult == TRUE && dropItem(entry)));
 	}
 }
