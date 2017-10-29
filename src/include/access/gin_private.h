@@ -460,8 +460,9 @@ extern GinPostingList *ginCompressPostingList(const ItemPointer ptrs, int nptrs,
 extern int ginPostingListDecodeAllSegmentsToTbm(Page page, TIDBitmap *tbm);
 
 extern GinPostingListDecoder *ginInitPostingListDecoder(Page page, ItemPointer advancePast, int *nitems_out);
-extern GinPostingListDecoder *ginInitPostingListDecoderFromTuple(Page page, IndexTuple itup, int *nitems_out);
+extern GinPostingListDecoder *ginInitPostingListDecoderFromTuple(IndexTuple itup, int *nitems_out);
 extern void ginFreePostingListDecoder(GinPostingListDecoder *decoder);
+extern void ginDecoderReset(GinPostingListDecoder *decoder);
 extern void ginDecoderAdvancePastItem(GinPostingListDecoder *decoder, ItemPointer advancePast);
 extern void internalGinDecodeItem(GinPostingListDecoder *decoder, int index);
 extern ItemPointer ginPostingListDecode(GinPostingList *plist, int *nitems_out);

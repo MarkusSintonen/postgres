@@ -412,7 +412,7 @@ restartScanEntry:
 		}
 		else if (GinGetNPosting(itup) > 0)
 		{
-			entry->decoder = ginInitPostingListDecoderFromTuple(page, itup, &entry->nlist);
+			entry->decoder = ginInitPostingListDecoderFromTuple(itup, &entry->nlist);
 			entry->predictNumberResult = entry->nlist;
 
 			entry->isFinished = FALSE;
@@ -839,21 +839,17 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 		 * A posting list from an entry tuple, or the last page of a posting
 		 * tree.
 		 */
-		do
+		ginDecoderAdvancePastItem(entry->decoder, &advancePast);
+		ipd = ginDecoderCurrent(entry->decoder);
+
+		if (ItemPointerIsValid(&ipd))
 		{
-			ginDecoderAdvancePastItem(entry->decoder, &advancePast);
-			ipd = ginDecoderCurrent(entry->decoder);
-
-			if (!ItemPointerIsValid(&ipd))
-			{
-				entry->isFinished = TRUE;
-				break;
-			}
-
 			entry->curItem = ipd;
-
-		} while (ginCompareItemPointers(&ipd, &advancePast) <= 0);
-		/* XXX: shouldn't we apply the fuzzy search limit here? */
+		}
+		else
+		{
+			entry->isFinished = TRUE;
+		}
 	}
 	else
 	{
@@ -881,8 +877,7 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 
 			entry->curItem = ipd;
 
-		} while (ginCompareItemPointers(&ipd, &advancePast) <= 0 ||
-				 (entry->reduceResult == TRUE && dropItem(entry)));
+		} while (entry->reduceResult == TRUE && dropItem(entry));
 	}
 }
 
