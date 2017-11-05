@@ -272,7 +272,7 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 }
 
 static inline int32
-internalGinItemPointerCompsCompare(ItemPointer ip1, BlockNumber ip2_blk, OffsetNumber ip2_offset)
+ginItemPointerComponentsCompare(ItemPointer ip1, BlockNumber ip2_blk, OffsetNumber ip2_offset)
 {
 	BlockNumber ip1_blk = ItemPointerGetBlockNumberNoCheck(ip1);
 
@@ -286,16 +286,6 @@ internalGinItemPointerCompsCompare(ItemPointer ip1, BlockNumber ip2_blk, OffsetN
 		return 1;
 	else
 		return 0;
-}
-
-void
-ginDecoderReset(GinPostingListDecoder *decoder)
-{
-	decoder->index = 0;
-	decoder->postingListPtr = (Pointer)decoder->segmentData;
-	decoder->dataPtr = NULL;
-	decoder->dataEndPtr = NULL;
-	decoder->decoderVal = 0;
 }
 
 void 
@@ -387,7 +377,7 @@ ginDecoderAdvancePastItem(GinPostingListDecoder *decoder, ItemPointer advancePas
 				decoder->dataPtr = NULL;
 			}
 
-			if (internalGinItemPointerCompsCompare(advancePast, blk, offset) < 0)
+			if (ginItemPointerComponentsCompare(advancePast, blk, offset) < 0)
 			{
 				return;
 			}
@@ -689,7 +679,7 @@ ginInitPostingListDecoderFromTuple(IndexTuple itup, int *nitems_out)
 	{
 		GinPostingList *plist = (GinPostingList *)ptr;
 		ItemPointer list = result->items;
-		Size			len;
+		Size		len;
 
 		len = (char *)GinNextPostingListSegment(plist) - (char *)plist;
 
