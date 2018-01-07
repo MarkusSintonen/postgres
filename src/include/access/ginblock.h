@@ -342,5 +342,6 @@ typedef struct
 #define GinNumItemsInPostingList(plist) (*(uint32 *)(plist)->bytes)
 #define GinSetNumItemsInPostingList(plist, numitems) (*(uint32 *)(plist)->bytes = (uint32)(numitems))
 #define SizeOfGinPostingListHeader 6
+#define GinHeaderSizeInPostingList(plist) (GinHasExtHeaderInPostingList(plist) ? SizeOfGinPostingListHeader : 0)
 
 #endif							/* GINBLOCK_H */

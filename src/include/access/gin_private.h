@@ -192,16 +192,16 @@ typedef struct
 
 typedef struct GinPostingListDecoder
 {
-	int index;
 	int numItems;
 	ItemPointerData current;
 	uint64 decoderVal;
+	int itemsIndex;
 	Pointer postingListPtr;
 	Pointer postingListEndPtr;
 	unsigned char *dataPtr;
 	unsigned char *dataEndPtr;
 	char *segmentData;
-	ItemPointerData *items;
+	ItemPointerData *itemsList;
 } GinPostingListDecoder;
 
 /*
@@ -457,7 +457,7 @@ extern void ginInsertCleanup(GinState *ginstate, bool full_clean,
 
 extern GinPostingList *ginCompressPostingList(const ItemPointer ptrs, int nptrs,
 					   int maxsize, int *nwritten);
-extern int ginPostingListDecodeAllSegmentsToTbm(Page page, TIDBitmap *tbm);
+extern int ginPostingListDecodePageToTbm(Page page, TIDBitmap *tbm);
 
 extern GinPostingListDecoder *ginInitPostingListDecoder(Page page, ItemPointer advancePast, int *nitems_out);
 extern GinPostingListDecoder *ginInitPostingListDecoderFromTuple(IndexTuple itup, int *nitems_out);

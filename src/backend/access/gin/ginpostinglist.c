@@ -105,6 +105,23 @@ uint64_to_offset_blk_num(uint64 val, BlockNumber *blk, OffsetNumber *offset)
 	*blk = (BlockNumber)(val >> MaxHeapTuplesPerPageBits);
 }
 
+static inline int32
+ginItemPointerComponentsCompare(ItemPointer ip1, BlockNumber ip2_blk, OffsetNumber ip2_offset)
+{
+	BlockNumber ip1_blk = ItemPointerGetBlockNumberNoCheck(ip1);
+
+	if (ip1_blk < ip2_blk)
+		return -1;
+	else if (ip1_blk > ip2_blk)
+		return 1;
+	else if (ItemPointerGetOffsetNumberNoCheck(ip1) < ip2_offset)
+		return -1;
+	else if (ItemPointerGetOffsetNumberNoCheck(ip1) > ip2_offset)
+		return 1;
+	else
+		return 0;
+}
+
 /*
  * Varbyte-encode 'val' into *ptr. *ptr is incremented to next integer.
  */
@@ -258,7 +275,7 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 #if defined (CHECK_ENCODING_ROUNDTRIP)
 	{
 		int			ndecoded;
-		ItemPointer	tmp = ginPostingListDecode(result, &ndecoded);
+		ItemPointer tmp = ginPostingListDecode(result, &ndecoded);
 		int			i;
 
 		Assert(ndecoded == totalpacked);
@@ -271,23 +288,23 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 	return result;
 }
 
-static inline int32
-ginItemPointerComponentsCompare(ItemPointer ip1, BlockNumber ip2_blk, OffsetNumber ip2_offset)
-{
-	BlockNumber ip1_blk = ItemPointerGetBlockNumberNoCheck(ip1);
+#define NextPostingListSegement(decoder, plist, next_plist) \
+	{ \
+		(plist) = GinNextPostingListSegment(plist); \
+		(next_plist) = GinNextPostingListSegment(plist); \
+		(decoder)->postingListPtr = (Pointer)(plist); \
+		(decoder)->dataPtr = NULL; \
+	} 
 
-	if (ip1_blk < ip2_blk)
-		return -1;
-	else if (ip1_blk > ip2_blk)
-		return 1;
-	else if (ItemPointerGetOffsetNumberNoCheck(ip1) < ip2_offset)
-		return -1;
-	else if (ItemPointerGetOffsetNumberNoCheck(ip1) > ip2_offset)
-		return 1;
-	else
-		return 0;
-}
-
+/*
+* Moves the decoder past the advancePast item pointer.
+*
+* Current decoded item pointer is accessed via ginDecoderCurrent.
+* Decoded item pointer is greater than previous decoder item pointer
+* and advancePast.
+* Decoded item pointer is set to invalid if no item pointer is found
+* past advancePast or if decoder has been consumed of item pointers.
+*/
 void 
 ginDecoderAdvancePastItem(GinPostingListDecoder *decoder, ItemPointer advancePast)
 {
@@ -298,22 +315,17 @@ ginDecoderAdvancePastItem(GinPostingListDecoder *decoder, ItemPointer advancePas
 		return;
 	}
 
-	if (decoder->items)
+	if (decoder->itemsList)
 	{
-		while (decoder->index < decoder->numItems)
+		while (decoder->itemsIndex < decoder->numItems)
 		{
-			decoder->current = decoder->items[decoder->index];
-			decoder->index++;
-
+			decoder->current = decoder->itemsList[decoder->itemsIndex++];
 			if (ginCompareItemPointers(advancePast, &decoder->current) < 0)
 			{
 				return;
 			}
 		}
-	}
 
-	if (decoder->index >= decoder->numItems)
-	{
 		ItemPointerSetInvalid(&decoder->current);
 		return;
 	}
@@ -322,19 +334,20 @@ ginDecoderAdvancePastItem(GinPostingListDecoder *decoder, ItemPointer advancePas
 	GinPostingList *next_plist = GinNextPostingListSegment(plist);
 	BlockNumber blk;
 	OffsetNumber offset;
+	bool found = false;
 
 	Assert(decoder->segmentData != NULL);
 	Assert(plist != NULL);
-	Assert(GinHasExtHeaderInPostingList(plist));
 	Assert(OffsetNumberIsValid(ItemPointerGetOffsetNumber(&plist->first)));
 
-	while (decoder->index < decoder->numItems)
+	ItemPointerSetInvalid(&decoder->current);
+
+	while (!found && ((Pointer)plist) < decoder->postingListEndPtr)
 	{
 		// Check if current posting list can be skipped
 		if (((Pointer)next_plist) < decoder->postingListEndPtr 
 			&& ginCompareItemPointers(&next_plist->first, advancePast) <= 0)
 		{
-			decoder->index += GinNumItemsInPostingList(plist);
 			decoder->postingListPtr = (Pointer)next_plist;
 			decoder->dataPtr = NULL;
 
@@ -346,90 +359,41 @@ ginDecoderAdvancePastItem(GinPostingListDecoder *decoder, ItemPointer advancePas
 			if (decoder->dataPtr == NULL)
 			{
 				// Start decoding of current posting list
-				decoder->current = plist->first;
-				decoder->index++;
-
-				decoder->dataPtr = plist->bytes + SizeOfGinPostingListHeader;
+				decoder->dataPtr = plist->bytes + GinHeaderSizeInPostingList(plist);
 				decoder->dataEndPtr = plist->bytes + GinNumBytesInPostingList(plist);
 				decoder->decoderVal = itemptr_to_uint64(&plist->first);
 
-				if (ginCompareItemPointers(advancePast, &decoder->current) < 0)
+				if (ginCompareItemPointers(advancePast, &plist->first) < 0)
 				{
-					return;
+					found = true;
+					decoder->current = plist->first;
+				}
+
+				if (decoder->dataPtr >= decoder->dataEndPtr)
+				{
+					NextPostingListSegement(decoder, plist, next_plist)
 				}
 			}
 
-			Assert(decoder->dataPtr < decoder->dataEndPtr);
+			while (!found && decoder->dataPtr < decoder->dataEndPtr)
+			{
+				decoder->decoderVal += decode_varbyte(&decoder->dataPtr);
+				uint64_to_offset_blk_num(decoder->decoderVal, &blk, &offset);
 
-			decoder->decoderVal += decode_varbyte(&decoder->dataPtr);
-
-			uint64_to_offset_blk_num(decoder->decoderVal, &blk, &offset);
-
-			GinItemPointerSetOffsetNumber(&decoder->current, offset);
-			GinItemPointerSetBlockNumber(&decoder->current, blk);
-			decoder->index++;
+				if (ginItemPointerComponentsCompare(advancePast, blk, offset) < 0)
+				{
+					found = true;
+					GinItemPointerSetOffsetNumber(&decoder->current, offset);
+					GinItemPointerSetBlockNumber(&decoder->current, blk);
+				}
+			}
 
 			if (decoder->dataPtr >= decoder->dataEndPtr)
 			{
-				plist = GinNextPostingListSegment(plist);
-				next_plist = GinNextPostingListSegment(plist);
-				decoder->postingListPtr = (Pointer)plist;
-				decoder->dataPtr = NULL;
-			}
-
-			if (ginItemPointerComponentsCompare(advancePast, blk, offset) < 0)
-			{
-				return;
+				NextPostingListSegement(decoder, plist, next_plist)
 			}
 		}
 	}
-
-	ItemPointerSetInvalid(&decoder->current);
-}
-
-int
-ginDecoderDecodeToTbm(GinPostingListDecoder *decoder, TIDBitmap *tbm)
-{
-	if (decoder->items)
-	{
-		tbm_add_tuples(tbm, decoder->items, decoder->numItems, false);
-		return decoder->numItems;
-	}
-
-	GinPostingList *plist = (GinPostingList *)decoder->segmentData;
-	ItemPointerData ipd;
-
-	while (decoder->index < decoder->numItems)
-	{
-		if (decoder->dataPtr == NULL)
-		{
-			ipd = plist->first;
-			tbm_add_tuples(tbm, &ipd, 1, false);
-			decoder->index++;
-
-			decoder->dataPtr = plist->bytes + SizeOfGinPostingListHeader;
-			decoder->dataEndPtr = plist->bytes + GinNumBytesInPostingList(plist);
-			decoder->decoderVal = itemptr_to_uint64(&plist->first);
-		}
-
-		Assert(decoder->dataPtr < decoder->dataEndPtr);
-
-		decoder->decoderVal += decode_varbyte(&decoder->dataPtr);
-
-		uint64_to_itemptr(decoder->decoderVal, &ipd);
-
-		tbm_add_tuples(tbm, &ipd, 1, false);
-		decoder->index++;
-
-		if (decoder->dataPtr >= decoder->dataEndPtr)
-		{
-			plist = GinNextPostingListSegment(plist);
-			decoder->postingListPtr = (Pointer)plist;
-			decoder->dataPtr = NULL;
-		}
-	}
-
-	return decoder->numItems;
 }
 
 /*
@@ -507,8 +471,8 @@ ginInitPostingListDecoder(Page page, ItemPointer advancePast, int *nitems_out)
 				result->segmentData = palloc(len);
 				result->postingListPtr = (Pointer)result->segmentData;
 				result->postingListEndPtr = result->postingListPtr + len;
-				result->items = NULL;
-				result->index = 0;
+				result->itemsList = NULL;
+				result->itemsIndex = 0;
 
 				memcpy(result->segmentData, (char *)segment, len);
 			}
@@ -581,10 +545,10 @@ ginInitPostingListDecoder(Page page, ItemPointer advancePast, int *nitems_out)
 				result->postingListPtr = NULL;
 				result->postingListEndPtr = NULL;
 				result->segmentData = NULL;
-				result->items = palloc(sizeof(ItemPointerData) * nitems);
-				result->index = 0;
+				result->itemsList = palloc(sizeof(ItemPointerData) * nitems);
+				result->itemsIndex = 0;
 
-				memcpy(result->items, items, nitems * sizeof(ItemPointerData));
+				memcpy(result->itemsList, items, nitems * sizeof(ItemPointerData));
 
 				pfree(items);
 			}
@@ -599,8 +563,8 @@ ginInitPostingListDecoder(Page page, ItemPointer advancePast, int *nitems_out)
 		{
 			result = palloc(sizeof(GinPostingListDecoder));
 			result->segmentData = NULL;
-			result->items = NULL;
-			result->index = 0;
+			result->itemsList = NULL;
+			result->itemsIndex = 0;
 			result->numItems = 0;
 			result->postingListPtr = NULL;
 			result->postingListEndPtr = NULL;
@@ -622,17 +586,17 @@ ginInitPostingListDecoder(Page page, ItemPointer advancePast, int *nitems_out)
 
 		result = palloc(sizeof(GinPostingListDecoder));
 
-		result->items = palloc(sizeof(ItemPointerData) * nitems);
+		result->itemsList = palloc(sizeof(ItemPointerData) * nitems);
 		result->segmentData = NULL;
 		result->postingListPtr = NULL;
 		result->postingListEndPtr = NULL;
 		result->numItems = nitems;
-		result->index = 0;
+		result->itemsIndex = 0;
 		result->dataPtr = NULL;
 		result->dataEndPtr = NULL;
 		result->decoderVal = 0;
 		ItemPointerSetMin(&result->current);
-		memcpy(result->items, (ItemPointer)ptr, sizeof(ItemPointerData) * nitems);
+		memcpy(result->itemsList, (ItemPointer)ptr, sizeof(ItemPointerData) * nitems);
 	}
 
 	if (nitems_out)
@@ -647,8 +611,8 @@ ginFreePostingListDecoder(GinPostingListDecoder *decoder)
 	if (decoder->segmentData)
 		pfree(decoder->segmentData);
 
-	if (decoder->items)
-		pfree(decoder->items);
+	if (decoder->itemsList)
+		pfree(decoder->itemsList);
 
 	pfree(decoder);
 }
@@ -668,7 +632,7 @@ ginInitPostingListDecoderFromTuple(IndexTuple itup, int *nitems_out)
 
 	result = palloc(sizeof(GinPostingListDecoder));
 
-	result->index = 0;
+	result->itemsIndex = 0;
 	result->numItems = nitems;
 	result->dataPtr = NULL;
 	result->dataEndPtr = NULL;
@@ -678,28 +642,27 @@ ginInitPostingListDecoderFromTuple(IndexTuple itup, int *nitems_out)
 	if (GinItupIsCompressed(itup))
 	{
 		GinPostingList *plist = (GinPostingList *)ptr;
-		ItemPointer list = result->items;
-		Size		len;
+		Size			len;
 
 		len = (char *)GinNextPostingListSegment(plist) - (char *)plist;
 
 		result->segmentData = palloc(len);
 		result->postingListPtr = (Pointer)result->segmentData;
 		result->postingListEndPtr = result->postingListPtr + len;
-		result->items = NULL;
+		result->itemsList = NULL;
 
 		memcpy(result->segmentData, (char *)plist, len);
 	}
 	else
 	{
-		result->items = palloc(sizeof(ItemPointerData) * nitems);
+		result->itemsList = palloc(sizeof(ItemPointerData) * nitems);
 		result->segmentData = NULL;
 		result->postingListPtr = NULL;
 		result->postingListEndPtr = NULL;
 
 		if (nitems > 0)
 		{
-			memcpy(result->items, ptr, sizeof(ItemPointerData) * nitems);
+			memcpy(result->itemsList, ptr, sizeof(ItemPointerData) * nitems);
 		}
 	}
 
@@ -710,16 +673,54 @@ ginInitPostingListDecoderFromTuple(IndexTuple itup, int *nitems_out)
 }
 
 /*
- * Add all item pointers from a bunch of posting lists to a TIDBitmap.
+ * Add all item pointers from a page to a TIDBitmap.
  */
 int
-ginPostingListDecodeAllSegmentsToTbm(Page page, TIDBitmap *tbm)
+ginPostingListDecodePageToTbm(Page page, TIDBitmap *tbm)
 {
 	GinPostingListDecoder	*decoder;
 	int						nitems;
 
 	decoder = ginInitPostingListDecoder(page, NULL, &nitems);
-	ginDecoderDecodeToTbm(decoder, tbm);
+
+	if (decoder->itemsList == NULL)
+	{
+		GinPostingList *plist = (GinPostingList *)decoder->segmentData;
+		ItemPointerData ipd;
+
+		while (((Pointer)plist) < decoder->postingListEndPtr)
+		{
+			if (decoder->dataPtr == NULL)
+			{
+				ipd = plist->first;
+				tbm_add_tuples(tbm, &ipd, 1, false);
+
+				decoder->dataPtr = plist->bytes + SizeOfGinPostingListHeader;
+				decoder->dataEndPtr = plist->bytes + GinNumBytesInPostingList(plist);
+				decoder->decoderVal = itemptr_to_uint64(&plist->first);
+			}
+
+			Assert(decoder->dataPtr < decoder->dataEndPtr);
+
+			decoder->decoderVal += decode_varbyte(&decoder->dataPtr);
+
+			uint64_to_itemptr(decoder->decoderVal, &ipd);
+
+			tbm_add_tuples(tbm, &ipd, 1, false);
+
+			if (decoder->dataPtr >= decoder->dataEndPtr)
+			{
+				plist = GinNextPostingListSegment(plist);
+				decoder->postingListPtr = (Pointer)plist;
+				decoder->dataPtr = NULL;
+			}
+		}
+	}
+	else
+	{
+		tbm_add_tuples(tbm, decoder->itemsList, decoder->numItems, false);
+	}
+
 	ginFreePostingListDecoder(decoder);
 
 	return nitems;
@@ -762,7 +763,7 @@ ginPostingListDecode(GinPostingList *plist, int *ndecoded_out)
 	ndecoded = 1;
 
 	val = itemptr_to_uint64(&plist->first);
-	ptr = plist->bytes + (GinHasExtHeaderInPostingList(plist) ? SizeOfGinPostingListHeader : 0);
+	ptr = plist->bytes + GinHeaderSizeInPostingList(plist);
 	endptr = plist->bytes + GinNumBytesInPostingList(plist);
 	while (ptr < endptr)
 	{

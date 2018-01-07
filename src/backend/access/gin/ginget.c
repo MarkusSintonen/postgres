@@ -85,7 +85,7 @@ scanPostingTree(Relation index, GinScanEntry scanEntry,
 		page = BufferGetPage(buffer);
 		if ((GinPageGetOpaque(page)->flags & GIN_DELETED) == 0)
 		{
-			int			n = ginPostingListDecodeAllSegmentsToTbm(page, scanEntry->matchBitmap);
+			int n = ginPostingListDecodePageToTbm(page, scanEntry->matchBitmap);
 
 			scanEntry->predictNumberResult += n;
 		}
@@ -578,7 +578,7 @@ startScan(IndexScanDesc scan)
 /*
  * Load the next batch of item pointers from a posting tree.
  *
- * Note that we copy the page into GinScanEntry->list array and unlock it, but
+ * Note that we copy the page into GinScanEntry->decoder data array and unlock it, but
  * keep it pinned to prevent interference with vacuum.
  */
 static void
